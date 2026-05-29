@@ -17,7 +17,7 @@ EXPECTED_TOOLS = {
     "join_chat", "leave_chat",
     # Added in 1.1
     "bulk_resolve", "get_message", "download_media", "set_reaction",
-    "remove_reaction", "pin_message", "unpin_message", "search_dialogs",
+    "remove_reaction", "pin_message", "unpin_message",
     "get_linked_chat", "join_via_invite",
     "ban_user", "unban_user", "kick_user", "promote_user", "demote_user",
     "create_poll", "vote_poll", "get_poll_results",

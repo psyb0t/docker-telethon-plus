@@ -149,51 +149,57 @@ Chat references (`chat`, `from_chat`, `to_chat`) accept whatever Telethon accept
 
 > **Numeric IDs only resolve for entities Telethon has already seen** — i.e. cached in your session via a prior `@username` / `t.me` lookup, dialog list, or incoming message. MTProto needs an `access_hash`, not just an ID, and bare numbers don't carry one. Especially relevant for bots: pass `@botusername` first (or call `GET /api/dialogs` / `GET /api/entities?chat=@bot` once) before referring to it by numeric ID. If you only have the bot's token and no username, hit Telegram's Bot API `getMe` to fetch the username, then use that.
 
+### Response shape
+
+Every 2xx returns the resource directly. No `{"result": ...}` wrapper, no envelope. Lists are JSON arrays, singles are JSON objects.
+
+Errors return `{"detail": "..."}` (FastAPI standard). Telegram RPC errors arrive as `502` with `detail = {"telegram_error": "...", "message": "..."}`.
+
 ### Quick reference
 
 | Endpoint | Required params | What it does |
 |---|---|---|
-| `GET /api/me` | — | Who the fuck am I — returns your account profile. |
-| `GET /api/entities` | `chat` | Resolve a username/ID/link to a full profile. |
-| `POST /api/entities/bulk` | `chats` | Bulk resolve many handles. Honors the resolve-username bucket. Returns per-handle success/error. |
-| `POST /api/messages` | `chat`, `text` | Send a text message. Supports `parse_mode`, `reply_to`, `silent`, `link_preview`, `schedule` (ISO datetime). |
+| `GET /api/me` | — | Account profile. |
+| `GET /api/entities` | `chat` | Resolve a username/ID/link to a profile. |
+| `POST /api/entities/bulk` | `chats` | Bulk resolve, honoring the resolve-username bucket. |
+| `GET /api/dialogs` | — | List dialogs. Optional: `limit`, `archived`, `search` (substring on title/@). |
 | `GET /api/messages` | `chat` | Read recent messages. Optional: `limit`, `offset_id`, `search`. |
-| `GET /api/messages/{id}` | `chat` | Fetch a single message by ID. |
-| `GET /api/messages/{id}/media` | `chat` | Download a message's media as base64. Optional: `max_bytes`. |
-| `GET /api/dialogs` | — | List your chats, groups, channels. Optional: `limit`, `archived`. |
-| `GET /api/dialogs/search` | `query` | Find dialogs by title or @username substring. |
-| `POST /api/messages/forward` | `from_chat`, `to_chat`, `message_ids` | Forward messages between chats. |
-| `DELETE /api/messages` | `chat`, `message_ids` | Nuke messages by ID. |
-| `PATCH /api/messages/{id}` | `chat`, `text` | Edit your message. |
+| `GET /api/messages/{id}` | `chat` | Fetch a single message. |
+| `GET /api/messages/{id}/media` | `chat` | Download attachment as **raw bytes** (binary stream). Returns `Content-Type` from Telegram + `Content-Disposition: attachment; filename=...`. Optional: `max_bytes`. MCP clients should use the `download_media` tool which returns base64. |
+| `POST /api/messages` | `chat`, **`text` or `file_url`** | Send a message. If `file_url` is present, fetches it and sends as media (with `text` as caption). Otherwise sends `text`. Optional: `parse_mode`, `reply_to`, `silent`, `link_preview`, `schedule`, `force_document`, `max_bytes`. |
+| `POST /api/messages/forward` | `from_chat`, `to_chat`, `message_ids` | Forward messages. |
 | `POST /api/messages/read` | `chat` | Mark as read. Optional `max_id`. |
-| `POST /api/messages/{id}/pin` | `chat` | Pin a message. Optional `silent`, `pm_oneside`. |
+| `PATCH /api/messages/{id}` | `chat`, `text` | Edit. |
+| `DELETE /api/messages` | `chat`, `message_ids` | Bulk delete (body has the list). |
+| `POST /api/messages/{id}/pin` | `chat` | Pin. Optional `silent`, `pm_oneside`. |
 | `POST /api/messages/{id}/unpin` | `chat` | Unpin. |
-| `POST /api/messages/{id}/reactions` | `chat`, `emoji` | React with an emoji. Optional `big`. |
+| `POST /api/messages/{id}/reactions` | `chat`, `emoji` | React. Optional `big`. |
 | `DELETE /api/messages/{id}/reactions` | `chat` | Remove your reaction. |
-| `POST /api/files` | `chat`, `file_url` | Fetch from URL and send. |
-| `GET /api/participants` | `chat` | List members. |
-| `POST /api/chats` | `title` | Create a supergroup or channel. |
-| `DELETE /api/chats` | `chat` | Delete a supergroup/channel you own. |
-| `POST /api/chats/join` | `chat` | Join a public channel/group. |
-| `POST /api/chats/invite` | `invite` | Join via private `t.me/+hash` invite link. |
+| `GET /api/participants` | `chat` | List members. Optional: `limit`, `search`. |
+| `POST /api/chats` | `title` | Create supergroup or channel. |
+| `DELETE /api/chats` | `chat` | Delete supergroup/channel you own (body). |
+| `POST /api/chats/join` | `chat` | Join public channel/group. |
+| `POST /api/chats/invite` | `invite` | Join via private `t.me/+hash`. |
 | `POST /api/chats/leave` | `chat` | Leave. |
-| `GET /api/channels/linked` | `chat` | Get a channel's linked discussion group, if any. |
-| `POST /api/admin/ban` | `chat`, `user` | Ban a user. Optional `until_seconds`. |
-| `POST /api/admin/unban` | `chat`, `user` | Lift a ban. |
-| `POST /api/admin/kick` | `chat`, `user` | Kick (ban+immediate unban). |
-| `POST /api/admin/promote` | `chat`, `user` | Grant admin rights. Per-permission booleans + optional `title`. |
-| `POST /api/admin/demote` | `chat`, `user` | Strip admin rights. |
+| `GET /api/chats/{chat}/linked` | — | Resolve a channel's linked discussion group. |
+| `POST /api/chats/{chat}/admin/ban` | `user` | Ban a user. Optional `until_seconds`. |
+| `POST /api/chats/{chat}/admin/unban` | `user` | Lift a ban. |
+| `POST /api/chats/{chat}/admin/kick` | `user` | Kick (ban + immediate unban). |
+| `POST /api/chats/{chat}/admin/promote` | `user` | Grant admin rights + optional `title`. |
+| `POST /api/chats/{chat}/admin/demote` | `user` | Strip admin rights. |
 | `POST /api/polls` | `chat`, `question`, `options` | Create a poll. Optional `quiz`, `correct_option`, `solution`. |
 | `POST /api/polls/{id}/vote` | `chat`, `options` | Vote (0-based indices). |
-| `GET /api/polls/{id}/results` | `chat` | Current results / vote counts. |
+| `GET /api/polls/{id}/results` | `chat` | Current vote counts. |
 | `GET /api/throttle/status` | — | Live rate-limit + cache state. |
-| `GET /api/account/health` | — | Flood-risk tier based on adaptive multiplier. |
+| `GET /api/account/health` | — | Flood-risk tier. |
 | `GET /metrics` | — | Prometheus exposition (no auth). |
-| `WS /ws/updates` | `?token=...` | Stream incoming Telegram events as JSON. |
+| `WS /ws/updates` | `?token=...` | Stream incoming Telegram events. |
+
+**`{chat}` in path** accepts the same formats as elsewhere: `@username`, numeric ID, `me`. Phone (`+...`) and `t.me/...` links need URL-encoding (`%2B` etc.) — usernames and IDs work inline.
 
 ## HTTP API
 
-Standard REST API. JSON in, JSON out. Every response is `{"result": ...}` on success.
+Standard REST API. JSON in, JSON out. 2xx returns the resource directly; errors return `{"detail": ...}`.
 
 If `TELETHON_AUTH_KEY` is set, every request (except `/healthz`) needs:
 
@@ -211,14 +217,12 @@ GET /api/me
 
 ```json
 {
-  "result": {
     "id": 123456789,
     "type": "User",
     "username": "psyb0t",
     "first_name": "Ciprian",
     "phone": "+40..."
   }
-}
 ```
 
 ### GET /api/entities
@@ -231,13 +235,11 @@ GET /api/entities?chat=@telegram
 
 ```json
 {
-  "result": {
     "id": 1234567,
     "type": "Channel",
     "username": "telegram",
     "title": "Telegram"
   }
-}
 ```
 
 ### GET /api/dialogs
@@ -252,30 +254,28 @@ GET /api/dialogs?limit=10&archived=false
 | `archived` | bool | false | Include archived chats |
 
 ```json
-{
-  "result": [
-    {
-      "id": 123456789,
-      "type": "User",
-      "username": "someone",
-      "first_name": "Some",
-      "last_name": "One",
-      "unread_count": 3,
-      "pinned": true,
-      "last_message": {
-        "id": 999,
-        "date": "2026-04-29T11:00:00+00:00",
-        "chat_id": 123456789,
-        "sender_id": 123456789,
-        "text": "hey",
-        "out": false,
-        "reply_to_msg_id": null,
-        "media": false,
-        "media_type": null
-      }
+[
+  {
+    "id": 123456789,
+    "type": "User",
+    "username": "someone",
+    "first_name": "Some",
+    "last_name": "One",
+    "unread_count": 3,
+    "pinned": true,
+    "last_message": {
+      "id": 999,
+      "date": "2026-04-29T11:00:00+00:00",
+      "chat_id": 123456789,
+      "sender_id": 123456789,
+      "text": "hey",
+      "out": false,
+      "reply_to_msg_id": null,
+      "media": false,
+      "media_type": null
     }
-  ]
-}
+  }
+]
 ```
 
 ### GET /api/messages
@@ -292,28 +292,26 @@ GET /api/messages?chat=me&limit=5&search=hello
 | `search` | string | — | Full-text search filter |
 
 ```json
-{
-  "result": [
-    {
-      "id": 4242,
-      "date": "2026-04-29T12:00:00+00:00",
-      "chat_id": 12345,
-      "sender_id": 67890,
-      "text": "hello",
-      "out": false,
-      "reply_to_msg_id": null,
-      "media": false,
-      "media_type": null
-    }
-  ]
-}
+[
+  {
+    "id": 4242,
+    "date": "2026-04-29T12:00:00+00:00",
+    "chat_id": 12345,
+    "sender_id": 67890,
+    "text": "hello",
+    "out": false,
+    "reply_to_msg_id": null,
+    "media": false,
+    "media_type": null
+  }
+]
 ```
 
 Newest first. Returns `[]` if nothing matches.
 
 ### POST /api/messages
 
-Send a message.
+Send a message. The same endpoint handles **text** and **files** — if the body contains `file_url`, the URL is fetched and sent as media (with `text` becoming the caption); otherwise `text` is sent as a plain message.
 
 ```http
 POST /api/messages
@@ -328,18 +326,33 @@ Content-Type: application/json
 }
 ```
 
+```http
+POST /api/messages
+Content-Type: application/json
+
+{
+  "chat": "@psyb0t",
+  "file_url": "https://example.com/photo.jpg",
+  "text": "look at this shit",
+  "silent": true
+}
+```
+
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `chat` | string | required | Target chat |
-| `text` | string | required | Message text (1–4096 chars) |
+| `text` | string | required if no `file_url` | Message text or caption (1–4096 chars) |
+| `file_url` | string | null | HTTPS URL to fetch and send as media. Telegram auto-picks media type from extension/MIME; override with `force_document`. |
 | `parse_mode` | string | null | `md` / `markdown` / `html` / null |
 | `reply_to` | int | null | Message ID to reply to |
 | `silent` | bool | false | Send without notification |
-| `link_preview` | bool | true | Show link previews |
+| `link_preview` | bool | true | Show link previews (text only) |
+| `schedule` | string | null | ISO datetime in the future to schedule the send |
+| `force_document` | bool | false | When sending a file: send as generic doc instead of letting Telegram pick |
+| `max_bytes` | int | 52428800 | When sending a file: reject larger than this (max 2 GB) |
 
 ```json
 {
-  "result": {
     "id": 4242,
     "date": "2026-04-29T12:00:00+00:00",
     "chat_id": 12345,
@@ -350,7 +363,6 @@ Content-Type: application/json
     "media": false,
     "media_type": null
   }
-}
 ```
 
 ### PATCH /api/messages/{id}
@@ -377,7 +389,6 @@ Content-Type: application/json
 
 ```json
 {
-  "result": {
     "id": 4242,
     "date": "2026-04-29T12:00:00+00:00",
     "chat_id": 99999,
@@ -388,7 +399,6 @@ Content-Type: application/json
     "media": false,
     "media_type": null
   }
-}
 ```
 
 ### DELETE /api/messages
@@ -413,7 +423,7 @@ Content-Type: application/json
 | `revoke` | bool | true | Delete for everyone, not just yourself |
 
 ```json
-{ "result": { "deleted": 2, "requested": 2 } }
+{ "deleted": 2, "requested": 2 }
 ```
 
 ### POST /api/messages/forward
@@ -438,21 +448,19 @@ Content-Type: application/json
 | `silent` | bool | false | Forward without notification |
 
 ```json
-{
-  "result": [
-    {
-      "id": 5001,
-      "date": "2026-04-29T12:01:00+00:00",
-      "chat_id": 99999,
-      "sender_id": 123456789,
-      "text": "forwarded content here",
-      "out": true,
-      "reply_to_msg_id": null,
-      "media": false,
-      "media_type": null
-    }
-  ]
-}
+[
+  {
+    "id": 5001,
+    "date": "2026-04-29T12:01:00+00:00",
+    "chat_id": 99999,
+    "sender_id": 123456789,
+    "text": "forwarded content here",
+    "out": true,
+    "reply_to_msg_id": null,
+    "media": false,
+    "media_type": null
+  }
+]
 ```
 
 ### POST /api/messages/read
@@ -472,51 +480,7 @@ Content-Type: application/json
 | `max_id` | int | 0 | Mark up to this message ID. `0` = mark all. |
 
 ```json
-{ "result": { "ok": true } }
-```
-
-### POST /api/files
-
-Download a file from an HTTPS URL and send it to a chat. Never touches your disk — goes through the container's scratch dir (`TELETHON_DOWNLOAD_DIR`) and gets cleaned up immediately.
-
-```http
-POST /api/files
-Content-Type: application/json
-
-{
-  "chat": "@psyb0t",
-  "file_url": "https://example.com/photo.jpg",
-  "caption": "look at this shit",
-  "silent": true
-}
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `chat` | string | required | Target chat |
-| `file_url` | string | required | HTTPS URL of the file to fetch and send |
-| `caption` | string | null | Caption text |
-| `parse_mode` | string | null | `md` / `html` / null |
-| `silent` | bool | false | Send without notification |
-| `force_document` | bool | false | Send as a generic file instead of letting Telegram pick media type |
-| `max_bytes` | int | 52428800 | Reject files larger than this (default 50 MB, max 2 GB) |
-
-Telegram auto-detects media type from the file extension and MIME type. A `.jpg` becomes a photo, `.mp4` becomes a video, `.mp3` becomes audio. Use `force_document: true` to override.
-
-```json
-{
-  "result": {
-    "id": 4243,
-    "date": "2026-04-29T12:02:00+00:00",
-    "chat_id": 12345,
-    "sender_id": 67890,
-    "text": "look at this shit",
-    "out": true,
-    "reply_to_msg_id": null,
-    "media": true,
-    "media_type": "MessageMediaPhoto"
-  }
-}
+{ "ok": true }
 ```
 
 ### GET /api/participants
@@ -534,11 +498,9 @@ GET /api/participants?chat=-1001234567890&limit=50&search=john
 | `search` | string | — | Filter by name |
 
 ```json
-{
-  "result": [
-    { "id": 123456789, "type": "User", "username": "johndoe", "first_name": "John" }
-  ]
-}
+[
+  { "id": 123456789, "type": "User", "username": "johndoe", "first_name": "John" }
+]
 ```
 
 Large public channels may return a limited set or require admin rights.
@@ -560,9 +522,7 @@ Content-Type: application/json
 | `megagroup` | bool | true | `true` = supergroup, `false` = broadcast channel |
 
 ```json
-{
-  "result": { "id": 1234567890, "type": "Channel", "title": "my-group" }
-}
+{ "id": 1234567890, "type": "Channel", "title": "my-group" }
 ```
 
 ### DELETE /api/chats
@@ -577,7 +537,7 @@ Content-Type: application/json
 ```
 
 ```json
-{ "result": { "ok": true } }
+{ "ok": true }
 ```
 
 ### POST /api/chats/join
@@ -592,7 +552,7 @@ Content-Type: application/json
 ```
 
 ```json
-{ "result": { "ok": true } }
+{ "ok": true }
 ```
 
 ### POST /api/chats/leave
@@ -607,7 +567,7 @@ Content-Type: application/json
 ```
 
 ```json
-{ "result": { "ok": true } }
+{ "ok": true }
 ```
 
 ### Errors
@@ -652,25 +612,25 @@ Live state of every bucket, multiplier, recent flood events, cache stats:
 
 ```json
 {
-  "result": {
-    "throttle": {
-      "enabled": true,
-      "adaptive": true,
-      "multiplier": 1.0,
-      "flood_events_1h": 0,
-      "buckets": {
-        "resolve_username": {"used": 0, "limit": 5, "window_seconds": 60},
-        "send": {"used": 0, "limit": 20, "window_seconds": 60}
-      },
-      "tracked_chats": 12,
-      "global_interval_ms": 50,
-      "per_chat_interval_ms": 1100,
-      "jitter_ms": 200
+  "throttle": {
+    "enabled": true,
+    "adaptive": true,
+    "multiplier": 1.0,
+    "flood_events_1h": 0,
+    "buckets": {
+      "resolve_username": {"used": 0, "limit": 5, "window_seconds": 60},
+      "send": {"used": 0, "limit": 20, "window_seconds": 60}
     },
-    "cache": {"entries": 247},
-    "read_only": false,
-    "dry_run": false
-  }
+    "tracked_chats_send": 12,
+    "tracked_chats_read": 30,
+    "global_interval_ms": 50,
+    "per_chat_interval_ms": 1100,
+    "per_chat_read_interval_ms": 250,
+    "jitter_ms": 200
+  },
+  "cache": {"entries": 247},
+  "read_only": false,
+  "dry_run": false
 }
 ```
 
@@ -678,14 +638,12 @@ Live state of every bucket, multiplier, recent flood events, cache stats:
 
 ```json
 {
-  "result": {
-    "authorized": true,
-    "risk": "ok",
-    "multiplier": 1.0,
-    "flood_events_1h": 0,
-    "read_only": false,
-    "dry_run": false
-  }
+  "authorized": true,
+  "risk": "ok",
+  "multiplier": 1.0,
+  "flood_events_1h": 0,
+  "read_only": false,
+  "dry_run": false
 }
 ```
 

@@ -308,12 +308,47 @@ class GetDialogsParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     limit: int = Field(20, ge=1, le=200)
     archived: bool = False
+    search: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description="Optional case-insensitive substring filter on title/username.",
+    )
 
 
 async def _get_dialogs(
     holder: TelethonHolder, params: GetDialogsParams
 ) -> List[Dict[str, Any]]:
     DIALOGS_PAGE = 100  # Telegram's messages.getDialogs page size
+
+    # Search mode: iterate dialogs and filter locally — stop when we have
+    # enough hits or run out of dialogs.
+    if params.search:
+        q = params.search.lower()
+        out: List[Dict[str, Any]] = []
+        seen = 0
+        async with holder.guard("read") as client:
+            async for dialog in client.iter_dialogs(archived=params.archived):
+                seen += 1
+                name = (dialog.name or "").lower()
+                username = (getattr(dialog.entity, "username", "") or "").lower()
+                if q in name or q in username:
+                    item = _entity_to_dict(dialog.entity)
+                    item["unread_count"] = dialog.unread_count
+                    item["pinned"] = dialog.pinned
+                    if dialog.message is not None:
+                        item["last_message"] = _message_to_dict(dialog.message)
+                    if dialog.entity is not None:
+                        holder.cache.put(str(getattr(dialog.entity, "id", "")), dialog.entity)
+                        uname = getattr(dialog.entity, "username", None)
+                        if uname:
+                            holder.cache.put(uname, dialog.entity)
+                    out.append(item)
+                    if len(out) >= params.limit:
+                        break
+        holder.throttle.record_extra("read", max(0, (seen - 1) // DIALOGS_PAGE))
+        return out
+
     async with holder.guard("read") as client:
         dialogs = await client.get_dialogs(
             limit=params.limit, archived=params.archived
@@ -521,7 +556,11 @@ class SendFileParams(BaseModel):
         ...,
         description="HTTPS URL of the file to download and forward to Telegram.",
     )
-    caption: Optional[str] = None
+    text: Optional[str] = Field(
+        None,
+        max_length=4096,
+        description="Optional caption/message text to attach to the file.",
+    )
     parse_mode: Optional[str] = None
     silent: bool = False
     force_document: bool = False
@@ -566,7 +605,7 @@ async def _send_file(
             msg = await client.send_file(
                 entity=entity,
                 file=tmp_path,
-                caption=params.caption,
+                caption=params.text,
                 parse_mode=params.parse_mode,
                 silent=params.silent,
                 force_document=params.force_document,
@@ -848,33 +887,68 @@ class DownloadMediaParams(BaseModel):
     max_bytes: int = Field(50 * 1024 * 1024, ge=1, le=2 * 1024 * 1024 * 1024)
 
 
-async def _download_media(
-    holder: TelethonHolder, params: DownloadMediaParams
+_DEFAULT_FILENAMES_BY_MIME = {
+    "image/jpeg": "photo.jpg",
+    "image/png": "photo.png",
+    "image/webp": "photo.webp",
+    "image/gif": "photo.gif",
+    "video/mp4": "video.mp4",
+    "video/webm": "video.webm",
+    "audio/ogg": "audio.ogg",
+    "audio/mpeg": "audio.mp3",
+}
+
+
+async def download_media_bytes(
+    holder: TelethonHolder,
+    chat: str,
+    message_id: int,
+    max_bytes: int,
 ) -> Dict[str, Any]:
-    entity = await holder.resolve_entity(params.chat)
-    chat_key = _chat_key(params.chat)
+    """Resolve, fetch, download. Returns {"data", "mime_type", "filename",
+    "media_type", "size"}. Used by both the base64 tool and the streaming
+    REST endpoint."""
+    entity = await holder.resolve_entity(chat)
+    chat_key = _chat_key(chat)
     async with holder.guard("read", chat_key=chat_key, chat_kind="read") as client:
-        msgs = await client.get_messages(entity, ids=[params.message_id])
+        msgs = await client.get_messages(entity, ids=[message_id])
         if not msgs or msgs[0] is None:
-            raise ValueError(f"message {params.message_id} not found in chat")
+            raise ValueError(f"message {message_id} not found in chat")
         msg = msgs[0]
         if msg.media is None:
             raise ValueError("message has no media attachment")
-    # Download under a second slot: large downloads can spawn many file-part
-    # requests internally; we count that as one read for simplicity but it
-    # would be safer to record more.
+        file_info = getattr(msg, "file", None)
+        mime_type = getattr(file_info, "mime_type", None) if file_info else None
+        filename = getattr(file_info, "name", None) if file_info else None
     async with holder.guard("read", chat_key=chat_key, chat_kind="read") as client:
         buf = io.BytesIO()
         await client.download_media(msg, file=buf)
         data = buf.getvalue()
-    if len(data) > params.max_bytes:
-        raise ValueError(
-            f"media too large: {len(data)} > max_bytes={params.max_bytes}"
-        )
+    if len(data) > max_bytes:
+        raise ValueError(f"media too large: {len(data)} > max_bytes={max_bytes}")
+    if not filename:
+        filename = _DEFAULT_FILENAMES_BY_MIME.get(mime_type or "", "download.bin")
     return {
+        "data": data,
         "size": len(data),
+        "mime_type": mime_type or "application/octet-stream",
+        "filename": filename,
         "media_type": type(msg.media).__name__,
-        "data_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+async def _download_media(
+    holder: TelethonHolder, params: DownloadMediaParams
+) -> Dict[str, Any]:
+    info = await download_media_bytes(
+        holder, params.chat, params.message_id, params.max_bytes
+    )
+    return {
+        "size": info["size"],
+        "media_type": info["media_type"],
+        "mime_type": info["mime_type"],
+        "filename": info["filename"],
+        "data_base64": base64.b64encode(info["data"]).decode("ascii"),
     }
 
 
@@ -1031,55 +1105,6 @@ _register(
         description="Unpin a previously pinned message.",
         params_model=UnpinMessageParams,
         handler=_unpin_message,
-    )
-)
-
-
-# ---------------------------------------------------------------------------
-# search_dialogs — find chats by title fragment
-# ---------------------------------------------------------------------------
-
-
-class SearchDialogsParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    query: str = Field(..., min_length=1, max_length=128)
-    limit: int = Field(20, ge=1, le=100)
-
-
-async def _search_dialogs(
-    holder: TelethonHolder, params: SearchDialogsParams
-) -> List[Dict[str, Any]]:
-    """Iterate dialogs locally and filter. Charges read-bucket per server page."""
-    DIALOGS_PAGE = 100
-    q = params.query.lower()
-    out: List[Dict[str, Any]] = []
-    seen = 0
-    async with holder.guard("read") as client:
-        async for dialog in client.iter_dialogs():
-            seen += 1
-            name = (dialog.name or "").lower()
-            username = (getattr(dialog.entity, "username", "") or "").lower()
-            if q in name or q in username:
-                item = _entity_to_dict(dialog.entity)
-                item["unread_count"] = dialog.unread_count
-                item["pinned"] = dialog.pinned
-                out.append(item)
-                if len(out) >= params.limit:
-                    break
-    # Account for internal pagination beyond the first acquired slot.
-    holder.throttle.record_extra("read", max(0, (seen - 1) // DIALOGS_PAGE))
-    return out
-
-
-_register(
-    Tool(
-        name="search_dialogs",
-        description=(
-            "Search your dialogs by title or @username substring. "
-            "Case-insensitive."
-        ),
-        params_model=SearchDialogsParams,
-        handler=_search_dialogs,
     )
 )
 

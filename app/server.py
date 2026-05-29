@@ -1,19 +1,37 @@
 """HTTP server: REST API, MCP streamable HTTP at /mcp, WS at /ws/updates.
 
-Adds on top of the basic surface:
-- /metrics (Prometheus exposition)
-- /api/throttle/status (live rate-limit + cache state)
-- /api/account/health (flood-risk tier)
-- /api/entities/bulk (bulk_resolve)
-- /api/messages/{id}/media (download_media)
-- /api/messages/{id}/pin, /unpin
-- /api/messages/{id}/reactions (set/remove)
-- /api/chats/invite (join via t.me/+hash)
-- /api/chats/{id}/admin (ban/unban/kick/promote/demote)
-- /api/polls (create), /api/polls/{id}/vote, /api/polls/{id}/results
-- /api/channels/{chat}/linked
-- Read-only middleware (413-ish — 403 Forbidden on writes when TELETHON_READ_ONLY=true)
-- X-Throttle-* response headers on every API call
+Response conventions
+--------------------
+- 2xx returns the resource directly. No `{"result": ...}` wrapper. Lists
+  are JSON arrays. Singles are JSON objects.
+- 4xx/5xx returns `{"detail": ...}` (FastAPI standard).
+
+Route conventions
+-----------------
+- Chat references live in path params where possible (`/api/chats/{chat}/...`).
+- For GETs that aren't chat-scoped, params go in the query string.
+- For mutations, params go in the JSON body.
+- DELETE keeps bodies for multi-id / multi-field bulk operations (Telegram's
+  delete shapes don't fit query strings cleanly).
+
+Routes
+------
+- /metrics, /healthz, /api/throttle/status, /api/account/health
+- /api/me, /api/entities, /api/entities/bulk
+- /api/dialogs                  (optional ?search=)
+- /api/messages                 (GET list, POST send-or-file, DELETE bulk)
+- /api/messages/{id}            (GET, PATCH, sub-routes for /pin, /unpin, /reactions, /media)
+- /api/messages/forward         (POST)
+- /api/messages/read            (POST)
+- /api/files                    (REMOVED — POST /api/messages with file_url)
+- /api/participants
+- /api/chats                    (POST create, DELETE delete)
+- /api/chats/join, /api/chats/leave, /api/chats/invite
+- /api/chats/{chat}/linked
+- /api/chats/{chat}/admin/{action}    ({ban,unban,kick,promote,demote})
+- /api/polls                    (POST create)
+- /api/polls/{id}/vote, /api/polls/{id}/results
+- /ws/updates
 """
 
 from __future__ import annotations
@@ -34,15 +52,15 @@ from telethon.errors import RPCError
 from app.client import TelethonHolder
 from app.config import Config
 from app.metrics import render as render_metrics
-from app.tools import REGISTRY, ParamsModel, Tool
+from app.tools import REGISTRY, ParamsModel, Tool, download_media_bytes
 from app.updates import event_payload_json
 
 log = logging.getLogger(__name__)
 
-# HTTP methods that are considered "writes" for read-only mode enforcement.
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# Paths that bypass read-only check (informational endpoints).
+# Paths that bypass the read-only check (informational endpoints that
+# happen to use POST for body-carrying).
 _READONLY_BYPASS_PATHS = {"/api/entities/bulk"}
 
 
@@ -105,6 +123,12 @@ async def _parse_body(request: Request) -> dict:
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
     return raw
+
+
+async def _run(holder: TelethonHolder, tool_name: str, raw: dict) -> Any:
+    tool = REGISTRY[tool_name]
+    params = _validate_params(tool, raw)
+    return await _invoke(holder, tool, params)
 
 
 def build_mcp(holder: TelethonHolder, host: str, port: int) -> FastMCP:
@@ -175,11 +199,11 @@ def build_app(cfg: Config) -> FastAPI:
     app = FastAPI(
         title="docker-telethon-plus",
         description="HTTP + MCP front-end for the Telethon Telegram client.",
-        version="1.1.0",
+        version="1.2.0",
         lifespan=lifespan,
     )
 
-    # ---- Middleware: auth, read-only, throttle headers -----------------
+    # ---- Middleware ----------------------------------------------------
 
     if cfg.auth_key:
         @app.middleware("http")
@@ -223,11 +247,11 @@ def build_app(cfg: Config) -> FastAPI:
                 for name, info in buckets.items():
                     remaining = max(0, info["limit"] - info["used"])
                     response.headers[f"X-RateLimit-Remaining-{name}"] = str(remaining)
-            except Exception:  # noqa: BLE001 — never let header logic break the response
+            except Exception:  # noqa: BLE001
                 log.debug("throttle header injection failed", exc_info=True)
         return response
 
-    # ---- System endpoints ---------------------------------------------
+    # ---- System --------------------------------------------------------
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, Any]:
@@ -245,272 +269,206 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/throttle/status")
     async def throttle_status_route() -> JSONResponse:
-        params = _validate_params(REGISTRY["throttle_status"], {})
-        result = await _invoke(holder, REGISTRY["throttle_status"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "throttle_status", {}))
 
     @app.get("/api/account/health")
     async def account_health_route() -> JSONResponse:
-        params = _validate_params(REGISTRY["account_health"], {})
-        result = await _invoke(holder, REGISTRY["account_health"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "account_health", {}))
 
-    # ---- Core message / chat endpoints (existing) ---------------------
+    # ---- Identity / entity resolution ---------------------------------
 
     @app.get("/api/me")
     async def get_me() -> JSONResponse:
-        params = _validate_params(REGISTRY["get_me"], {})
-        result = await _invoke(holder, REGISTRY["get_me"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_me", {}))
 
     @app.get("/api/entities")
     async def get_entity(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["get_entity"], raw)
-        result = await _invoke(holder, REGISTRY["get_entity"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_entity", dict(request.query_params)))
 
     @app.post("/api/entities/bulk")
     async def bulk_resolve_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["bulk_resolve"], raw)
-        result = await _invoke(holder, REGISTRY["bulk_resolve"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "bulk_resolve", await _parse_body(request)))
+
+    # ---- Dialogs -------------------------------------------------------
 
     @app.get("/api/dialogs")
     async def get_dialogs(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["get_dialogs"], raw)
-        result = await _invoke(holder, REGISTRY["get_dialogs"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_dialogs", dict(request.query_params)))
 
-    @app.get("/api/dialogs/search")
-    async def search_dialogs_route(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["search_dialogs"], raw)
-        result = await _invoke(holder, REGISTRY["search_dialogs"], params)
-        return JSONResponse(content={"result": result})
+    # ---- Messages ------------------------------------------------------
 
     @app.get("/api/messages")
     async def get_messages(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["get_messages"], raw)
-        result = await _invoke(holder, REGISTRY["get_messages"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_messages", dict(request.query_params)))
+
+    @app.post("/api/messages")
+    async def send_message_or_file(request: Request) -> JSONResponse:
+        """One endpoint, two flavors: body has `file_url` → send file; else
+        plain text via `text`. Dispatches to the matching tool."""
+        raw = await _parse_body(request)
+        tool_name = "send_file" if raw.get("file_url") else "send_message"
+        return JSONResponse(content=await _run(holder, tool_name, raw))
+
+    @app.post("/api/messages/forward")
+    async def forward_messages(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "forward_messages", await _parse_body(request)))
+
+    @app.post("/api/messages/read")
+    async def mark_read(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "mark_read", await _parse_body(request)))
+
+    @app.delete("/api/messages")
+    async def delete_messages(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "delete_messages", await _parse_body(request)))
 
     @app.get("/api/messages/{message_id}")
     async def get_message_route(message_id: int, request: Request) -> JSONResponse:
         raw = dict(request.query_params)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["get_message"], raw)
-        result = await _invoke(holder, REGISTRY["get_message"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.get("/api/messages/{message_id}/media")
-    async def download_media_route(message_id: int, request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["download_media"], raw)
-        result = await _invoke(holder, REGISTRY["download_media"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/messages")
-    async def send_message(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["send_message"], raw)
-        result = await _invoke(holder, REGISTRY["send_message"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/messages/forward")
-    async def forward_messages(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["forward_messages"], raw)
-        result = await _invoke(holder, REGISTRY["forward_messages"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/messages/read")
-    async def mark_read(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["mark_read"], raw)
-        result = await _invoke(holder, REGISTRY["mark_read"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_message", raw))
 
     @app.patch("/api/messages/{message_id}")
     async def edit_message(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["edit_message"], raw)
-        result = await _invoke(holder, REGISTRY["edit_message"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "edit_message", raw))
 
-    @app.delete("/api/messages")
-    async def delete_messages(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["delete_messages"], raw)
-        result = await _invoke(holder, REGISTRY["delete_messages"], params)
-        return JSONResponse(content={"result": result})
+    @app.get("/api/messages/{message_id}/media")
+    async def download_media_route(message_id: int, request: Request) -> Response:
+        """Stream the file as raw bytes with proper Content-Type +
+        Content-Disposition. For base64 use the `download_media` MCP tool."""
+        chat = request.query_params.get("chat", "")
+        if not chat:
+            raise HTTPException(status_code=400, detail="`chat` query param required")
+        try:
+            max_bytes = int(request.query_params.get("max_bytes", 50 * 1024 * 1024))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid max_bytes: {exc}") from exc
+        holder.metrics.record_tool_call("download_media")
+        try:
+            info = await download_media_bytes(holder, chat, message_id, max_bytes)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RPCError as exc:
+            holder.metrics.record_tool_error("download_media")
+            raise HTTPException(
+                status_code=502,
+                detail={"telegram_error": exc.__class__.__name__, "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            holder.metrics.record_tool_error("download_media")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(
+            content=info["data"],
+            media_type=info["mime_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{info["filename"]}"',
+                "X-Media-Type": info["media_type"],
+                "Content-Length": str(info["size"]),
+            },
+        )
 
     @app.post("/api/messages/{message_id}/pin")
     async def pin_message_route(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["pin_message"], raw)
-        result = await _invoke(holder, REGISTRY["pin_message"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "pin_message", raw))
 
     @app.post("/api/messages/{message_id}/unpin")
     async def unpin_message_route(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["unpin_message"], raw)
-        result = await _invoke(holder, REGISTRY["unpin_message"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "unpin_message", raw))
 
     @app.post("/api/messages/{message_id}/reactions")
     async def set_reaction_route(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["set_reaction"], raw)
-        result = await _invoke(holder, REGISTRY["set_reaction"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "set_reaction", raw))
 
     @app.delete("/api/messages/{message_id}/reactions")
     async def remove_reaction_route(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["remove_reaction"], raw)
-        result = await _invoke(holder, REGISTRY["remove_reaction"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "remove_reaction", raw))
 
-    # ---- Files --------------------------------------------------------
-
-    @app.post("/api/files")
-    async def send_file(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["send_file"], raw)
-        result = await _invoke(holder, REGISTRY["send_file"], params)
-        return JSONResponse(content={"result": result})
-
-    # ---- Participants / chats -----------------------------------------
+    # ---- Participants --------------------------------------------------
 
     @app.get("/api/participants")
     async def get_participants(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["get_participants"], raw)
-        result = await _invoke(holder, REGISTRY["get_participants"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_participants", dict(request.query_params)))
+
+    # ---- Chats ---------------------------------------------------------
 
     @app.post("/api/chats")
     async def create_group(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["create_group"], raw)
-        result = await _invoke(holder, REGISTRY["create_group"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/chats/join")
-    async def join_chat(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["join_chat"], raw)
-        result = await _invoke(holder, REGISTRY["join_chat"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/chats/invite")
-    async def join_via_invite_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["join_via_invite"], raw)
-        result = await _invoke(holder, REGISTRY["join_via_invite"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/chats/leave")
-    async def leave_chat(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["leave_chat"], raw)
-        result = await _invoke(holder, REGISTRY["leave_chat"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "create_group", await _parse_body(request)))
 
     @app.delete("/api/chats")
     async def delete_chat(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "delete_chat", await _parse_body(request)))
+
+    @app.post("/api/chats/join")
+    async def join_chat(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "join_chat", await _parse_body(request)))
+
+    @app.post("/api/chats/leave")
+    async def leave_chat(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "leave_chat", await _parse_body(request)))
+
+    @app.post("/api/chats/invite")
+    async def join_via_invite_route(request: Request) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "join_via_invite", await _parse_body(request)))
+
+    @app.get("/api/chats/{chat}/linked")
+    async def get_linked_chat_route(chat: str) -> JSONResponse:
+        return JSONResponse(content=await _run(holder, "get_linked_chat", {"chat": chat}))
+
+    # ---- Chat admin actions (nested under the chat) -------------------
+
+    _ADMIN_ACTIONS = {
+        "ban": "ban_user",
+        "unban": "unban_user",
+        "kick": "kick_user",
+        "promote": "promote_user",
+        "demote": "demote_user",
+    }
+
+    @app.post("/api/chats/{chat}/admin/{action}")
+    async def chat_admin_route(chat: str, action: str, request: Request) -> JSONResponse:
+        tool_name = _ADMIN_ACTIONS.get(action)
+        if tool_name is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"unknown admin action {action!r}; valid: {sorted(_ADMIN_ACTIONS)}",
+            )
         raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["delete_chat"], raw)
-        result = await _invoke(holder, REGISTRY["delete_chat"], params)
-        return JSONResponse(content={"result": result})
+        raw["chat"] = chat
+        return JSONResponse(content=await _run(holder, tool_name, raw))
 
-    @app.get("/api/channels/linked")
-    async def get_linked_chat_route(request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
-        params = _validate_params(REGISTRY["get_linked_chat"], raw)
-        result = await _invoke(holder, REGISTRY["get_linked_chat"], params)
-        return JSONResponse(content={"result": result})
-
-    # ---- Channel admin actions ----------------------------------------
-
-    @app.post("/api/admin/ban")
-    async def ban_user_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["ban_user"], raw)
-        result = await _invoke(holder, REGISTRY["ban_user"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/admin/unban")
-    async def unban_user_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["unban_user"], raw)
-        result = await _invoke(holder, REGISTRY["unban_user"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/admin/kick")
-    async def kick_user_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["kick_user"], raw)
-        result = await _invoke(holder, REGISTRY["kick_user"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/admin/promote")
-    async def promote_user_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["promote_user"], raw)
-        result = await _invoke(holder, REGISTRY["promote_user"], params)
-        return JSONResponse(content={"result": result})
-
-    @app.post("/api/admin/demote")
-    async def demote_user_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["demote_user"], raw)
-        result = await _invoke(holder, REGISTRY["demote_user"], params)
-        return JSONResponse(content={"result": result})
-
-    # ---- Polls --------------------------------------------------------
+    # ---- Polls ---------------------------------------------------------
 
     @app.post("/api/polls")
     async def create_poll_route(request: Request) -> JSONResponse:
-        raw = await _parse_body(request)
-        params = _validate_params(REGISTRY["create_poll"], raw)
-        result = await _invoke(holder, REGISTRY["create_poll"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "create_poll", await _parse_body(request)))
 
     @app.post("/api/polls/{message_id}/vote")
     async def vote_poll_route(message_id: int, request: Request) -> JSONResponse:
         raw = await _parse_body(request)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["vote_poll"], raw)
-        result = await _invoke(holder, REGISTRY["vote_poll"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "vote_poll", raw))
 
     @app.get("/api/polls/{message_id}/results")
     async def poll_results_route(message_id: int, request: Request) -> JSONResponse:
         raw = dict(request.query_params)
         raw["message_id"] = message_id
-        params = _validate_params(REGISTRY["get_poll_results"], raw)
-        result = await _invoke(holder, REGISTRY["get_poll_results"], params)
-        return JSONResponse(content={"result": result})
+        return JSONResponse(content=await _run(holder, "get_poll_results", raw))
 
     # ---- WebSocket updates --------------------------------------------
 
     if cfg.updates_enabled:
         @app.websocket("/ws/updates")
         async def ws_updates(ws: WebSocket) -> None:
-            # If auth_key is set, require the same Bearer token via query string
-            # or first text frame (browsers can't set Authorization on WS upgrade).
             if cfg.auth_key:
                 token = ws.query_params.get("token", "")
                 if not secrets.compare_digest(token, cfg.auth_key):

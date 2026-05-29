@@ -65,7 +65,10 @@ def test_correct_token_accepted(authed_url: str) -> None:
         timeout=10.0,
     )
     assert resp.status_code == 200
-    assert "result" in resp.json()
+    body = resp.json()
+    # Payload returned directly, no result wrapper.
+    assert "id" in body
+    assert "type" in body
 
 
 def test_healthz_always_public(authed_url: str) -> None:
