@@ -99,6 +99,39 @@ All config via environment variables. Copy `.env.example` to get the full list w
 | `TELETHON_DOWNLOAD_DIR` | no | `/tmp/telethon-plus` | Scratch space for `send_file` uploads |
 | `TELETHON_AUTH_KEY` | no | `""` | When set, all endpoints require `Authorization: Bearer <key>`. `/healthz` stays public. Empty = no auth. |
 
+### Throttling & cache (anti-flood)
+
+Telegram bans accounts that hammer it. Defaults here are conservative — meant to keep you under the server-side limits without you having to think about it. Tune only if you know what you're doing.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TELETHON_THROTTLE_ENABLED` | `true` | Master switch for all rate-limiting below |
+| `TELETHON_THROTTLE_GLOBAL_INTERVAL_MS` | `50` | Min gap between any two outgoing requests |
+| `TELETHON_THROTTLE_JITTER_MS` | `200` | Random ±jitter added on top (kills metronome traffic patterns) |
+| `TELETHON_THROTTLE_PER_CHAT_INTERVAL_MS` | `1100` | Min gap between sends to the same chat (Telegram's "1/sec/chat" ceiling, with margin) |
+| `TELETHON_THROTTLE_PER_CHAT_READ_INTERVAL_MS` | `250` | Min gap between reads from the same chat. Stops single-channel scraping from monopolizing the read bucket. |
+| `TELETHON_THROTTLE_ADAPTIVE` | `true` | On each `FLOOD_WAIT`, multiply all waits ×2 for an hour. Resets after a quiet hour. |
+| `TELETHON_BUCKET_RESOLVE_PER_MIN` | `5` | Cap on `resolveUsername` — **the main thing that gets accounts 22-hour-banned** |
+| `TELETHON_BUCKET_GET_FULL_PER_MIN` | `10` | Cap on `getFullChannel` / `getFullUser` / `get_participants` |
+| `TELETHON_BUCKET_JOIN_PER_HOUR` | `5` | Cap on channel/group joins |
+| `TELETHON_BUCKET_CREATE_PER_HOUR` | `5` | Cap on channel/group creation |
+| `TELETHON_BUCKET_SEND_PER_MIN` | `20` | Cap on sends across all chats |
+| `TELETHON_BUCKET_READ_PER_MIN` | `600` | Cap on read ops. **Counted per server-side API call**, not per tool call: `get_messages(limit=300)` charges 3 slots (Telegram caps GetHistory at 100/page); `get_dialogs(limit=500)` similarly charges 5. |
+| `TELETHON_CACHE_ENABLED` | `true` | Persist resolved entities to disk |
+| `TELETHON_CACHE_PATH` | `/cache/entities.json` | Mount `/cache` as a host volume to keep this across rebuilds |
+| `TELETHON_CACHE_TTL_SECONDS` | `604800` | 7 days. Set `0` for no expiry. |
+| `TELETHON_FLOOD_SLEEP_THRESHOLD` | `60` | Telethon's reactive auto-sleep: if a `FLOOD_WAIT` is shorter than this many seconds, sleep through it. Above this, raise. Set very high (e.g. `86400`) to never raise — but then a hostile FLOOD_WAIT will block your process for the full duration. |
+
+**How the layers stack:**
+
+1. Entity cache short-circuits resolveUsername — first lookup of `@somechannel` calls Telegram; every subsequent lookup is free. Survives container restarts via the `/cache` volume.
+2. Per-method token buckets cap the dangerous methods. If you try to resolve 6 new usernames in one minute, the 6th sleeps until the oldest expires.
+3. Per-chat send interval throttles sends to each chat to ≤1/sec (with margin).
+4. Global gap + jitter humanizes the overall traffic shape.
+5. Adaptive backoff: a single FLOOD_WAIT halves your effective rate for an hour. Three in a row → ÷8. Auto-recovers after an idle hour.
+
+**For bulk scraping work** (the scenario that caused 22-hour bans before): the cache + `bucket_resolve_per_min=5` combination is what saves you. Resolving 200 new channels takes ~40 minutes instead of getting you banned in 5.
+
 ## Tools
 
 JSON in, JSON out. All inputs are pydantic-validated — send garbage, get a `400` back with exactly what's wrong.
@@ -122,19 +155,41 @@ Chat references (`chat`, `from_chat`, `to_chat`) accept whatever Telethon accept
 |---|---|---|
 | `GET /api/me` | — | Who the fuck am I — returns your account profile. |
 | `GET /api/entities` | `chat` | Resolve a username/ID/link to a full profile. |
-| `POST /api/messages` | `chat`, `text` | Send a text message. Supports `parse_mode` (`md`/`html`), `reply_to`, `silent`, `link_preview`. |
-| `GET /api/messages` | `chat` | Read recent messages. Optional: `limit` (default 20, max 200), `offset_id`, `search`. |
-| `GET /api/dialogs` | — | List your chats, groups, and channels. Optional: `limit`, `archived`. |
-| `POST /api/messages/forward` | `from_chat`, `to_chat`, `message_ids` | Forward one or more messages between chats. |
-| `DELETE /api/messages` | `chat`, `message_ids` | Nuke messages by ID. `revoke: true` (default) deletes for everyone. |
-| `PATCH /api/messages/{id}` | `chat`, `text` | Fix your typos after the fact. |
-| `POST /api/messages/read` | `chat` | Mark messages as read. Optional: `max_id` (default 0 = all). |
-| `POST /api/files` | `chat`, `file_url` | Download a file from an HTTPS URL and send it. Optional: `caption`, `parse_mode`, `silent`, `force_document`, `max_bytes`. |
-| `GET /api/participants` | `chat` | List members of a group or channel. Optional: `limit` (default 100, max 1000), `search`. |
-| `POST /api/chats` | `title` | Create a supergroup or broadcast channel. Optional: `megagroup` (default true). |
-| `DELETE /api/chats` | `chat` | Delete a supergroup or channel you own. |
-| `POST /api/chats/join` | `chat` | Join a public channel or supergroup. |
-| `POST /api/chats/leave` | `chat` | Leave a channel or supergroup. |
+| `POST /api/entities/bulk` | `chats` | Bulk resolve many handles. Honors the resolve-username bucket. Returns per-handle success/error. |
+| `POST /api/messages` | `chat`, `text` | Send a text message. Supports `parse_mode`, `reply_to`, `silent`, `link_preview`, `schedule` (ISO datetime). |
+| `GET /api/messages` | `chat` | Read recent messages. Optional: `limit`, `offset_id`, `search`. |
+| `GET /api/messages/{id}` | `chat` | Fetch a single message by ID. |
+| `GET /api/messages/{id}/media` | `chat` | Download a message's media as base64. Optional: `max_bytes`. |
+| `GET /api/dialogs` | — | List your chats, groups, channels. Optional: `limit`, `archived`. |
+| `GET /api/dialogs/search` | `query` | Find dialogs by title or @username substring. |
+| `POST /api/messages/forward` | `from_chat`, `to_chat`, `message_ids` | Forward messages between chats. |
+| `DELETE /api/messages` | `chat`, `message_ids` | Nuke messages by ID. |
+| `PATCH /api/messages/{id}` | `chat`, `text` | Edit your message. |
+| `POST /api/messages/read` | `chat` | Mark as read. Optional `max_id`. |
+| `POST /api/messages/{id}/pin` | `chat` | Pin a message. Optional `silent`, `pm_oneside`. |
+| `POST /api/messages/{id}/unpin` | `chat` | Unpin. |
+| `POST /api/messages/{id}/reactions` | `chat`, `emoji` | React with an emoji. Optional `big`. |
+| `DELETE /api/messages/{id}/reactions` | `chat` | Remove your reaction. |
+| `POST /api/files` | `chat`, `file_url` | Fetch from URL and send. |
+| `GET /api/participants` | `chat` | List members. |
+| `POST /api/chats` | `title` | Create a supergroup or channel. |
+| `DELETE /api/chats` | `chat` | Delete a supergroup/channel you own. |
+| `POST /api/chats/join` | `chat` | Join a public channel/group. |
+| `POST /api/chats/invite` | `invite` | Join via private `t.me/+hash` invite link. |
+| `POST /api/chats/leave` | `chat` | Leave. |
+| `GET /api/channels/linked` | `chat` | Get a channel's linked discussion group, if any. |
+| `POST /api/admin/ban` | `chat`, `user` | Ban a user. Optional `until_seconds`. |
+| `POST /api/admin/unban` | `chat`, `user` | Lift a ban. |
+| `POST /api/admin/kick` | `chat`, `user` | Kick (ban+immediate unban). |
+| `POST /api/admin/promote` | `chat`, `user` | Grant admin rights. Per-permission booleans + optional `title`. |
+| `POST /api/admin/demote` | `chat`, `user` | Strip admin rights. |
+| `POST /api/polls` | `chat`, `question`, `options` | Create a poll. Optional `quiz`, `correct_option`, `solution`. |
+| `POST /api/polls/{id}/vote` | `chat`, `options` | Vote (0-based indices). |
+| `GET /api/polls/{id}/results` | `chat` | Current results / vote counts. |
+| `GET /api/throttle/status` | — | Live rate-limit + cache state. |
+| `GET /api/account/health` | — | Flood-risk tier based on adaptive multiplier. |
+| `GET /metrics` | — | Prometheus exposition (no auth). |
+| `WS /ws/updates` | `?token=...` | Stream incoming Telegram events as JSON. |
 
 ## HTTP API
 
@@ -575,6 +630,126 @@ GET /healthz
 ```
 
 `authorized: false` means the container started but the session is fucked — bad string, revoked, or Telegram unreachable. Always public, no auth required.
+
+## Observability
+
+### `GET /metrics`
+
+Prometheus exposition. Scrape it. No auth (publicly readable inside your cluster — if you need it locked down, put it behind your usual scrape-network policy).
+
+Series exported:
+- `telethon_plus_tool_calls_total{tool=...}`
+- `telethon_plus_tool_errors_total{tool=...}`
+- `telethon_plus_flood_events_total{bucket=...}`
+- `telethon_plus_cache_hits_total` / `_misses_total` / `_entries`
+- `telethon_plus_throttle_multiplier`
+- `telethon_plus_bucket_used{bucket=...}` / `_bucket_limit{bucket=...}`
+- `telethon_plus_uptime_seconds`
+
+### `GET /api/throttle/status`
+
+Live state of every bucket, multiplier, recent flood events, cache stats:
+
+```json
+{
+  "result": {
+    "throttle": {
+      "enabled": true,
+      "adaptive": true,
+      "multiplier": 1.0,
+      "flood_events_1h": 0,
+      "buckets": {
+        "resolve_username": {"used": 0, "limit": 5, "window_seconds": 60},
+        "send": {"used": 0, "limit": 20, "window_seconds": 60}
+      },
+      "tracked_chats": 12,
+      "global_interval_ms": 50,
+      "per_chat_interval_ms": 1100,
+      "jitter_ms": 200
+    },
+    "cache": {"entries": 247},
+    "read_only": false,
+    "dry_run": false
+  }
+}
+```
+
+### `GET /api/account/health`
+
+```json
+{
+  "result": {
+    "authorized": true,
+    "risk": "ok",
+    "multiplier": 1.0,
+    "flood_events_1h": 0,
+    "read_only": false,
+    "dry_run": false
+  }
+}
+```
+
+`risk` is `ok` (multiplier 1×), `warning` (≥2×), or `high` (≥8×).
+
+### Throttle response headers
+
+Every `/api/...` response carries:
+- `X-Throttle-Multiplier`
+- `X-Throttle-Flood-Events-1h`
+- `X-RateLimit-Remaining-<bucket>` for each bucket
+
+Lets clients self-throttle without polling `/api/throttle/status`.
+
+## Updates / webhooks
+
+Two ways to receive incoming Telegram events (new messages, edits, deletes, chat actions):
+
+### WebSocket — `/ws/updates`
+
+```javascript
+const ws = new WebSocket('ws://your-host:8080/ws/updates?token=YOUR_AUTH_KEY');
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
+```
+
+If `TELETHON_AUTH_KEY` is set, pass it as `?token=`. Browser WS clients can't set Authorization headers, hence query-string.
+
+Multiple subscribers are supported — each gets its own queue. Slow consumers drop events at `TELETHON_UPDATES_BUFFER_SIZE`.
+
+### Outbound webhook — `TELETHON_POST_TO_URL`
+
+Set the env var to your endpoint and every event gets `POST`ed there as JSON. Fire-and-forget — a slow or failing webhook never blocks Telethon's loop. Use for distributed workers, separate processes, anything that can't hold a WS open.
+
+### Event payload shape
+
+```json
+{
+  "type": "NewMessage",
+  "message": {
+    "id": 4242,
+    "date": "2026-04-29T12:00:00+00:00",
+    "text": "hi",
+    "out": false,
+    "sender_id": 12345,
+    "chat_id": -1001234567890,
+    "reply_to_msg_id": null,
+    "media": false,
+    "media_type": null
+  },
+  "chat_id": -1001234567890
+}
+```
+
+For `MessageEdited`, `MessageDeleted`, `ChatAction` — same shape, fewer fields.
+
+## Safety switches
+
+### `TELETHON_READ_ONLY=true`
+
+Every write endpoint returns `403`. Reads, status, metrics still work. Killswitch for panic mode or for keeping a test deployment harmless.
+
+### `TELETHON_DRY_RUN=true`
+
+Write endpoints accept the request, validate it, **don't** call Telegram, return `{"dry_run": true, "would_...": {...}}`. Useful for verifying scripts before pointing them at production.
 
 ## MCP
 

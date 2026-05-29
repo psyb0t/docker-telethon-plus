@@ -10,21 +10,18 @@ from mcp.client.streamable_http import streamablehttp_client
 
 
 EXPECTED_TOOLS = {
-    "get_me",
-    "get_entity",
-    "send_message",
-    "get_messages",
-    "get_dialogs",
-    "forward_messages",
-    "delete_messages",
-    "edit_message",
-    "mark_read",
-    "send_file",
-    "get_participants",
-    "create_group",
-    "delete_chat",
-    "join_chat",
-    "leave_chat",
+    # Original
+    "get_me", "get_entity", "send_message", "get_messages", "get_dialogs",
+    "forward_messages", "delete_messages", "edit_message", "mark_read",
+    "send_file", "get_participants", "create_group", "delete_chat",
+    "join_chat", "leave_chat",
+    # Added in 1.1
+    "bulk_resolve", "get_message", "download_media", "set_reaction",
+    "remove_reaction", "pin_message", "unpin_message", "search_dialogs",
+    "get_linked_chat", "join_via_invite",
+    "ban_user", "unban_user", "kick_user", "promote_user", "demote_user",
+    "create_poll", "vote_poll", "get_poll_results",
+    "throttle_status", "account_health",
 }
 
 

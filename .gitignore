@@ -21,6 +21,7 @@ venv/
 .pytest_cache/
 .pyright/
 .ruff_cache/
+.cache/
 
 # build artifacts
 build/

@@ -23,9 +23,12 @@ WORKDIR /app
 COPY app/ /app/app/
 COPY login.py /app/login.py
 
-RUN chown -R telethon-plus:telethon-plus /app && touch /session && chmod 666 /session
+RUN chown -R telethon-plus:telethon-plus /app && touch /session && chmod 666 /session \
+    && mkdir -p /cache && chown telethon-plus:telethon-plus /cache && chmod 700 /cache
 
 USER telethon-plus
+
+VOLUME ["/cache"]
 
 ENV TELETHON_HTTP_LISTEN_ADDRESS=0.0.0.0:8080
 ENV PYTHONUNBUFFERED=1

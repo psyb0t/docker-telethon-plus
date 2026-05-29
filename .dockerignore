@@ -25,3 +25,4 @@ LICENSE
 Makefile
 CLAUDE.md
 git-update.sh
+.cache/

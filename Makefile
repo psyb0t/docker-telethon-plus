@@ -5,7 +5,7 @@ TEST_TAG   := $(TAG)-test
 -include .env
 export
 
-.PHONY: all build build-test run test lint format login clean help
+.PHONY: all build build-test run test test-unit lint format login clean help
 
 all: build ## Build image
 
@@ -16,12 +16,14 @@ build-test: ## Build the test Docker image
 	docker build -t $(IMAGE_NAME):$(TEST_TAG) .
 
 run: build ## Run container locally on :8080 (needs TELETHON_API_ID/HASH/SESSION env)
+	@mkdir -p $${PWD}/.cache
 	docker run --rm -it \
 		-p 8080:8080 \
 		-e TELETHON_API_ID \
 		-e TELETHON_API_HASH \
 		-e TELETHON_SESSION \
 		-e TELETHON_HTTP_LISTEN_ADDRESS=0.0.0.0:8080 \
+		-v $${PWD}/.cache:/cache \
 		$(IMAGE_NAME):$(TAG)
 
 test: build-test ## Run integration tests in Docker (needs .env — see .env.example)
@@ -33,6 +35,17 @@ test: build-test ## Run integration tests in Docker (needs .env — see .env.exa
 		-w $$(pwd)/tests \
 		-e TELETHON_TESTS_SKIP_BUILD=1 \
 		$(IMAGE_NAME):testrunner
+
+test-unit: build ## Run unit tests inside the production image (no Telegram needed)
+	docker run --rm \
+		-u root \
+		-v $$(pwd):$$(pwd) \
+		-w $$(pwd) \
+		-e PYTHONPATH=$$(pwd) \
+		--entrypoint /bin/sh \
+		$(IMAGE_NAME):$(TAG) \
+		-c 'pip install --quiet pytest==9.0.3 pytest-asyncio==1.3.0 && \
+		    python -m pytest tests/unit/ -c tests/unit/pytest.ini'
 
 login: build ## Interactive login — writes TELETHON_SESSION to .env automatically
 	@SESSION_FILE=.session.tmp && \

@@ -24,6 +24,17 @@ def _int(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise RuntimeError(f"{name} must be boolean-ish, got {raw!r}")
+
+
 def _split_host_port(addr: str) -> tuple[str, int]:
     if ":" not in addr:
         raise RuntimeError(
@@ -52,6 +63,32 @@ class Config:
     proxy: str
     download_dir: str
     auth_key: str
+    # Throttling
+    throttle_enabled: bool
+    throttle_global_interval_ms: int
+    throttle_jitter_ms: int
+    throttle_per_chat_interval_ms: int
+    throttle_per_chat_read_interval_ms: int
+    throttle_adaptive: bool
+    bucket_resolve_per_min: int
+    bucket_get_full_per_min: int
+    bucket_join_per_hour: int
+    bucket_create_per_hour: int
+    bucket_send_per_min: int
+    bucket_read_per_min: int
+    # Entity cache
+    cache_enabled: bool
+    cache_path: str
+    cache_ttl_seconds: int
+    # Safety + observability
+    read_only: bool
+    dry_run: bool
+    log_json: bool
+    metrics_enabled: bool
+    post_to_url: str
+    post_to_timeout: float
+    updates_enabled: bool
+    updates_buffer_size: int
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -97,4 +134,29 @@ class Config:
             proxy=os.environ.get("TELETHON_PROXY", ""),
             download_dir=os.environ.get("TELETHON_DOWNLOAD_DIR", "/tmp/telethon-plus"),
             auth_key=os.environ.get("TELETHON_AUTH_KEY", "").strip(),
+            throttle_enabled=_bool("TELETHON_THROTTLE_ENABLED", True),
+            throttle_global_interval_ms=_int("TELETHON_THROTTLE_GLOBAL_INTERVAL_MS", 50),
+            throttle_jitter_ms=_int("TELETHON_THROTTLE_JITTER_MS", 200),
+            throttle_per_chat_interval_ms=_int("TELETHON_THROTTLE_PER_CHAT_INTERVAL_MS", 1100),
+            throttle_per_chat_read_interval_ms=_int(
+                "TELETHON_THROTTLE_PER_CHAT_READ_INTERVAL_MS", 250
+            ),
+            throttle_adaptive=_bool("TELETHON_THROTTLE_ADAPTIVE", True),
+            bucket_resolve_per_min=_int("TELETHON_BUCKET_RESOLVE_PER_MIN", 5),
+            bucket_get_full_per_min=_int("TELETHON_BUCKET_GET_FULL_PER_MIN", 10),
+            bucket_join_per_hour=_int("TELETHON_BUCKET_JOIN_PER_HOUR", 5),
+            bucket_create_per_hour=_int("TELETHON_BUCKET_CREATE_PER_HOUR", 5),
+            bucket_send_per_min=_int("TELETHON_BUCKET_SEND_PER_MIN", 20),
+            bucket_read_per_min=_int("TELETHON_BUCKET_READ_PER_MIN", 600),
+            cache_enabled=_bool("TELETHON_CACHE_ENABLED", True),
+            cache_path=os.environ.get("TELETHON_CACHE_PATH", "/cache/entities.json"),
+            cache_ttl_seconds=_int("TELETHON_CACHE_TTL_SECONDS", 7 * 24 * 3600),
+            read_only=_bool("TELETHON_READ_ONLY", False),
+            dry_run=_bool("TELETHON_DRY_RUN", False),
+            log_json=_bool("TELETHON_LOG_JSON", False),
+            metrics_enabled=_bool("TELETHON_METRICS_ENABLED", True),
+            post_to_url=os.environ.get("TELETHON_POST_TO_URL", "").strip(),
+            post_to_timeout=float(os.environ.get("TELETHON_POST_TO_TIMEOUT", "10")),
+            updates_enabled=_bool("TELETHON_UPDATES_ENABLED", True),
+            updates_buffer_size=_int("TELETHON_UPDATES_BUFFER_SIZE", 256),
         )
