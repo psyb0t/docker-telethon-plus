@@ -10,12 +10,26 @@ from typing import Any, AsyncIterator, Optional
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
+from telethon.tl.types import PeerChannel, PeerChat, PeerUser
 
 from app.cache import EntityCache
 from app.config import Config
 from app.metrics import MetricsRegistry
 from app.throttle import BucketSpec, ThrottleConfig, Throttler
 from app.updates import UpdateBroker
+
+
+def _peer_from_cached(cached: dict) -> Any:
+    """Wrap cached id with the right Peer type so telethon doesn't default
+    to PeerUser when handed a bare positive int — required to hit telethon's
+    session DB without a fresh ResolveUsername round-trip."""
+    eid = int(cached["id"])
+    etype = cached.get("type") or ""
+    if etype in ("Channel", "ChannelFull"):
+        return PeerChannel(eid)
+    if etype in ("Chat", "ChatFull"):
+        return PeerChat(eid)
+    return PeerUser(eid)
 
 log = logging.getLogger(__name__)
 
@@ -155,7 +169,7 @@ class TelethonHolder:
             self._metrics.record_cache(hit=True)
             try:
                 async with self.guard("other"):
-                    entity = await self.client.get_entity(cached["id"])
+                    entity = await self.client.get_entity(_peer_from_cached(cached))
                 # Refresh entry so TTL slides forward.
                 self._cache.put(stripped, entity)
                 return entity
