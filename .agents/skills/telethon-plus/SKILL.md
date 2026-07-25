@@ -5,6 +5,10 @@ homepage: https://github.com/psyb0t/docker-telethon-plus
 user-invocable: true
 metadata:
   { "openclaw": { "emoji": "✈️", "primaryEnv": "TELETHON_PLUS_URL", "requires": { "bins": ["docker", "curl"] } } }
+permissions:
+  shell: "setup-only — docker/curl for install, login, and container management (see references/setup.md); runtime API calls are plain HTTP, not shell"
+  network: "outbound HTTP to $TELETHON_PLUS_URL (every API/MCP call), plus server-side fetch of caller-supplied file_url when present (POST /api/messages, send_file)"
+  account_access: "full-access Telegram user account — read, write, and admin (not a sandboxed bot); every call acts as the account owner"
 ---
 
 # telethon-plus
@@ -27,7 +31,7 @@ For installation, login, and container setup, see [references/setup.md](referenc
 
 ## Security & safety
 
-- **This skill issues local shell commands** (`docker`, `curl`) on the machine it runs on — installer/setup steps in [references/setup.md](references/setup.md) run `docker run` / `docker compose` / `curl` directly.
+- **Declared capabilities** (see `permissions:` in the frontmatter): `shell` (setup-only), `network` (runtime HTTP), and full Telegram account access. **Setup-only shell vs. runtime API is a hard line** — `docker run` / `docker compose` / `curl` in [references/setup.md](references/setup.md) are one-time operator commands to stand up the container; every runtime call this skill makes afterward is a plain HTTP request (`curl` as an HTTP client, or MCP), never a new shell/docker invocation against the host.
 - **Outbound HTTP** — every API call is a `curl`/HTTP request to the `telethon-plus` server (`$TELETHON_PLUS_URL`), and the server itself makes outbound calls to Telegram's MTProto servers and, when `file_url` is used, to whatever URL is given (see the SSRF note below).
 - **Drives a full-access Telegram user account** — read AND write AND admin, not a sandboxed bot. Any call this skill makes acts as the account owner (see "Authorized / responsible use" below for the account-level rules).
 - **Destructive / admin operations require explicit user confirmation** naming the exact target (chat, message IDs, user) before running — see the per-endpoint warnings in the API tables below (`DELETE /api/chats`, ban/kick/promote, bulk `DELETE /api/messages`).
@@ -180,7 +184,7 @@ curl -s "$TELETHON_PLUS_URL/api/messages/4242?chat=me" | jq
 
 Send a message. **One endpoint, two flavors** — if the body has `file_url`, that URL is fetched and sent as media (with `text` as the caption); otherwise `text` is sent as a plain message.
 
-> **SSRF note:** `file_url` is fetched **server-side** — the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. Restrict `file_url` to trusted, publicly-known URLs; prefer a direct upload path (or fetching the file yourself and re-hosting it) over passing through arbitrary caller-supplied URLs.
+> **SSRF note:** `file_url` is fetched **server-side** — the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. **Don't pass arbitrary caller-supplied URLs through as `file_url`.** Restrict it to `https` scheme and a small set of trusted, publicly-known domains you control or explicitly trust — never build `file_url` from untrusted input (a message someone else sent, a scraped page, an LLM-generated guess). **Prefer local file upload over server-side URL fetches**: fetch the file yourself (client-side, where you can validate it) and send it as a direct upload instead of handing the container a URL to fetch blind.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
