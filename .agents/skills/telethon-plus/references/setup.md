@@ -2,6 +2,12 @@
 
 Operator-side reference — installing, logging in, and configuring the container. The agent skill itself is **consumer-only**: it talks to an already-running, already-logged-in instance and never provisions or authenticates an account.
 
+## Deployment guidance (read before exposing this anywhere)
+
+- **Bind to localhost, or put TLS in front of it.** Don't expose `TELETHON_HTTP_LISTEN_ADDRESS` on `0.0.0.0` to an untrusted network without a reverse proxy terminating TLS (see "Public Access via Reverse Proxy" below).
+- **Set `TELETHON_AUTH_KEY`.** Unset/empty = every route except `/healthz` and `/metrics` is wide open to anyone who can reach the port.
+- **Never expose `/mcp/` or `/api/` to untrusted agents or networks.** Both surfaces grant full read/write/admin control of a real Telegram account — treat them like you'd treat exposing a database or a cloud credential, not like a public API.
+
 ## Requirements
 
 - Docker.
@@ -87,7 +93,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 
 | Var | Default | Notes |
 |---|---|---|
-| `TELETHON_AUTH_KEY` | `""` (no auth) | When set, `Authorization: Bearer <key>` required on every route except `/healthz` and `/metrics`; WS takes it as `?token=`. Empty = wide open. |
+| `TELETHON_AUTH_KEY` | `""` (no auth) | When set, `Authorization: Bearer <key>` required on every route except `/healthz` and `/metrics`; WS takes it as `?token=`. Empty = wide open — every route including `/mcp/` and `/api/` is reachable by anyone who can reach the port. Set this before exposing the container beyond a fully trusted, private network. |
 | `TELETHON_HTTP_LISTEN_ADDRESS` | `0.0.0.0:8080` | `host:port` to bind inside the container. |
 
 ### Client identity + behavior
@@ -138,7 +144,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 |---|---|---|
 | `TELETHON_UPDATES_ENABLED` | `true` | Register incoming-event handlers and expose `/ws/updates` |
 | `TELETHON_UPDATES_BUFFER_SIZE` | `256` | Per-subscriber WS queue depth; slow consumers drop events past this |
-| `TELETHON_POST_TO_URL` | `""` | Outbound webhook — every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. |
+| `TELETHON_POST_TO_URL` | `""` | Outbound webhook — every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. **Data exfiltration warning:** once set, EVERY incoming message's content, sender metadata, and account activity is forwarded to this URL, indefinitely, for as long as the container runs. Use only a trusted HTTPS endpoint you control — never a third party's URL. |
 | `TELETHON_POST_TO_TIMEOUT` | `10` | Webhook POST timeout (seconds) |
 
 ## Ports
@@ -164,7 +170,7 @@ curl -s http://localhost:8080/healthz | jq              # liveness + authorized 
 curl -s http://localhost:8080/api/throttle/status | jq  # live rate-limit + cache state
 ```
 
-If `/healthz` reports `authorized: false`, the session is dead — re-run the login flow and update `TELETHON_SESSION`.
+If the container isn't responding on `/healthz`, the session is likely dead — an unauthorized `TELETHON_SESSION` makes the process exit at startup rather than serve a degraded `authorized: false`. Check `docker logs`, then re-run the login flow and update `TELETHON_SESSION`.
 
 ## Public Access via Reverse Proxy (optional)
 

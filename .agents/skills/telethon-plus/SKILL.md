@@ -25,6 +25,14 @@ Capabilities:
 
 For installation, login, and container setup, see [references/setup.md](references/setup.md).
 
+## Security & safety
+
+- **This skill issues local shell commands** (`docker`, `curl`) on the machine it runs on — installer/setup steps in [references/setup.md](references/setup.md) run `docker run` / `docker compose` / `curl` directly.
+- **Outbound HTTP** — every API call is a `curl`/HTTP request to the `telethon-plus` server (`$TELETHON_PLUS_URL`), and the server itself makes outbound calls to Telegram's MTProto servers and, when `file_url` is used, to whatever URL is given (see the SSRF note below).
+- **Drives a full-access Telegram user account** — read AND write AND admin, not a sandboxed bot. Any call this skill makes acts as the account owner (see "Authorized / responsible use" below for the account-level rules).
+- **Destructive / admin operations require explicit user confirmation** naming the exact target (chat, message IDs, user) before running — see the per-endpoint warnings in the API tables below (`DELETE /api/chats`, ban/kick/promote, bulk `DELETE /api/messages`).
+- **Deployment:** bind the server to `localhost`/loopback or put it behind TLS on a reverse proxy, set `TELETHON_AUTH_KEY` (empty = no auth, wide open), and never expose `/mcp/` or `/api/` to untrusted agents/networks — either surface hands out full account control. See [references/setup.md](references/setup.md) for the full deployment + auth guidance.
+
 ## Authorized / responsible use
 
 **This drives a REAL Telegram user account, not a bot.** Whoever holds the session string *is* the account owner — full read/write access to every DM, group, and channel that account can reach. Treat it like the account's password.
@@ -76,7 +84,7 @@ curl -s $TELETHON_PLUS_URL/healthz
 # {"status": "ok", "authorized": true}
 ```
 
-`authorized: false` means the container booted but the session is dead (bad/revoked string, or Telegram unreachable) — the operator must re-login. `/healthz` is always public.
+If the session is dead (bad/revoked string, or Telegram unreachable) the container fails to start rather than booting with `authorized: false` — the process exits and `/healthz` never comes up. Check `docker logs` and re-login. `/healthz` is always public.
 
 For install / first-time login / env vars / ports, see [references/setup.md](references/setup.md).
 
@@ -172,6 +180,8 @@ curl -s "$TELETHON_PLUS_URL/api/messages/4242?chat=me" | jq
 
 Send a message. **One endpoint, two flavors** — if the body has `file_url`, that URL is fetched and sent as media (with `text` as the caption); otherwise `text` is sent as a plain message.
 
+> **SSRF note:** `file_url` is fetched **server-side** — the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. Restrict `file_url` to trusted, publicly-known URLs; prefer a direct upload path (or fetching the file yourself and re-hosting it) over passing through arbitrary caller-supplied URLs.
+
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `chat` | string | required | Target chat |
@@ -225,6 +235,8 @@ Bulk delete by ID (body carries the list).
 | `chat` | string | required | Chat containing the messages |
 | `message_ids` | list[int] | required | IDs to delete (max 100) |
 | `revoke` | bool | true | Delete for everyone, not just yourself |
+
+> **Irreversible**, and with `revoke: true` (the default) it deletes for everyone in the chat, not just you. Confirm the exact `chat` and `message_ids` with the user before calling this on a shared chat.
 
 ```bash
 curl -s -X DELETE $TELETHON_PLUS_URL/api/messages \
@@ -309,6 +321,8 @@ Large public channels may return a limited set or require admin rights.
 | `POST /api/chats/leave` | `chat` | Leave a channel/group |
 | `GET /api/chats/{chat}/linked` | — | Resolve a channel's linked discussion group |
 
+> **Destructive.** `DELETE /api/chats` permanently deletes the chat for everyone in it and cannot be undone. Require explicit user confirmation naming the exact chat before calling it — prefer leaving it disabled/unused unless the task genuinely needs it.
+
 ```bash
 curl -s -X POST $TELETHON_PLUS_URL/api/chats \
   -H 'Content-Type: application/json' -d '{"title":"my-group","megagroup":true}' | jq
@@ -321,11 +335,13 @@ curl -s -X POST $TELETHON_PLUS_URL/api/chats \
 
 | Action | Body | Notes |
 |---|---|---|
-| `ban` | `user`, `until_seconds?` | Ban; `until_seconds=0` = permanent |
+| `ban` | `user`, `until_seconds?` | Ban; `until_seconds=0` = permanent — **visible, disruptive** |
 | `unban` | `user` | Lift a ban |
-| `kick` | `user` | Ban + immediate unban (they can rejoin via invite) |
-| `promote` | `user`, `title?` (≤16 chars) | Grant admin rights |
+| `kick` | `user` | Ban + immediate unban (they can rejoin via invite) — **visible, disruptive** |
+| `promote` | `user`, `title?` (≤16 chars), plus booleans `change_info`, `post_messages`, `edit_messages`, `delete_messages`, `ban_users`, `invite_users`, `pin_messages`, `add_admins`, `anonymous`, `manage_call` (all default `false`) | Grant admin rights — pass the specific booleans you want, omitting all of them grants admin with no permissions — **privilege escalation, irreversible without another admin demoting them back** |
 | `demote` | `user` | Strip admin rights |
+
+> **Admin ops act on other people's membership/permissions and are visible to the whole chat.** Require explicit user confirmation naming the exact chat and target user before calling `ban`, `kick`, or `promote`.
 
 ```bash
 curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
@@ -336,7 +352,7 @@ curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
 
 | Method + path | Body / params | What it does |
 |---|---|---|
-| `POST /api/polls` | `chat`, `question`, `options`, `quiz?`, `correct_option?`, `solution?` | Create a poll |
+| `POST /api/polls` | `chat`, `question`, `options`, `multiple_choice?`, `quiz?`, `correct_option?`, `solution?` | Create a poll |
 | `POST /api/polls/{id}/vote` | `chat`, `options` (0-based indices) | Vote |
 | `GET /api/polls/{id}/results` | `chat` | Current vote counts |
 
@@ -354,6 +370,8 @@ Every `/api/...` response also carries `X-Throttle-Multiplier`, `X-Throttle-Floo
 > The server ships **conservative anti-flood throttling** on by default (per-method token buckets, per-chat send/read intervals, global gap + jitter, adaptive backoff on `FLOOD_WAIT`, plus a persistent entity cache). If a call seems slow, it may be the throttle protecting the account — check `GET /api/throttle/status`. Tuning the buckets is an operator concern (see setup); don't try to defeat them.
 
 ## Incoming-message webhook (`TELETHON_POST_TO_URL`)
+
+> **Data exfiltration warning:** enabling `TELETHON_POST_TO_URL` forwards **every incoming Telegram event** — full message content, sender metadata, and account activity — to that external endpoint, for as long as the container runs. Point it ONLY at a trusted HTTPS endpoint you control. Anyone who controls that endpoint gets a live copy of everything the account receives.
 
 When the operator sets `TELETHON_POST_TO_URL` on the server, **every incoming Telegram event** (new message, edit, delete, chat action) is `POST`ed to that URL as JSON — fire-and-forget, so a slow or failing webhook never blocks Telethon's loop. This is the way to pipe incoming DMs/messages into a separate app or worker that can't hold a WebSocket open.
 
