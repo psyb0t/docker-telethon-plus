@@ -8,6 +8,9 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM python:3.12-slim
 
+# MCP Registry ownership label
+LABEL io.modelcontextprotocol.server.name="io.github.psyb0t/telethon-plus"
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
