@@ -2,6 +2,11 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.5.6 — 2026-07-27
+
+- Fixed the "## Agent integrations" README section: the Codex subsection was missing its install command. It now includes `codex plugin add telethon-plus@psyb0t` right after the marketplace-add step.
+- Clarified that the skill's invocation form differs by source: installed via the marketplace it's `$telethon-plus:telethon-plus`, while Codex's automatic pickup from a repo's own `.agents/skills/` (no install needed) uses plain `$telethon-plus`.
+
 ## v0.5.5 — 2026-07-27
 
 - Added Claude Code (`.agents/.claude-plugin/plugin.json`) and Codex (`.agents/.codex-plugin/plugin.json`) plugin manifests so the existing skill installs natively in both clients.

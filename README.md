@@ -741,9 +741,10 @@ Claude Code prompts for the telethon-plus server URL and, if auth is enabled, th
 
 ```bash
 codex plugin marketplace add psyb0t/agents
+codex plugin add telethon-plus@psyb0t
 ```
 
-Codex also picks the skill up automatically in any repo containing `.agents/skills/`, and invokes it as `$telethon-plus`.
+Installed via the marketplace, the skill invokes as `$telethon-plus:telethon-plus`. Codex also picks the skill up automatically with no install in any repo containing `.agents/skills/`, where it invokes as plain `$telethon-plus`.
 
 ### OpenClaw
 
