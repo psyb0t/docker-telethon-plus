@@ -1,5 +1,6 @@
 # docker-telethon-plus
 
+[![CI](https://github.com/psyb0t/docker-telethon-plus/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/psyb0t/docker-telethon-plus/actions/workflows/pipeline.yml)
 [![version](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/version.svg)](https://github.com/psyb0t/docker-telethon-plus/releases)
 [![license](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/license.svg)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/psyb0t/telethon-plus?style=flat-square)](https://hub.docker.com/r/psyb0t/telethon-plus)
