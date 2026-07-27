@@ -1,7 +1,8 @@
 # docker-telethon-plus
 
-[![Docker Hub](https://img.shields.io/docker/pulls/psyb0t/telethon-plus?style=flat-square)](https://hub.docker.com/r/psyb0t/telethon-plus)
-[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg?style=flat-square)](http://www.wtfpl.net/)
+[![version](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/version.svg)](https://github.com/psyb0t/docker-telethon-plus/releases)
+[![license](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/license.svg)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/psyb0t/telethon-plus?style=flat-square)](https://hub.docker.com/r/psyb0t/telethon-plus)
 
 Your Telegram account, but it takes HTTP requests. Wraps [Telethon](https://codeberg.org/Lonami/Telethon) — the real MTProto userbot client, not that neutered Bot API garbage — behind a JSON HTTP API and a Model Context Protocol endpoint.
 
