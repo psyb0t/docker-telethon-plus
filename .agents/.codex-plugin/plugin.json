@@ -1,0 +1,11 @@
+{
+  "name": "telethon-plus",
+  "version": "0.5.5",
+  "description": "HTTP + MCP control plane over a real Telegram MTProto userbot (Telethon) — send/read/edit/delete/forward messages, dialogs, entities, media, chat admin, and polls, plus an incoming-message webhook.",
+  "author": { "name": "psyb0t", "url": "https://github.com/psyb0t" },
+  "homepage": "https://github.com/psyb0t/docker-telethon-plus",
+  "repository": "https://github.com/psyb0t/docker-telethon-plus",
+  "license": "WTFPL",
+  "keywords": ["telegram", "telethon", "userbot", "mtproto", "mcp", "webhook", "automation"],
+  "skills": "./skills/"
+}

@@ -20,6 +20,7 @@ One login. One session string. Never type a code again.
 - [Tools](#tools)
 - [HTTP API](#http-api)
 - [MCP](#mcp)
+- [Agent integrations](#agent-integrations)
 - [Development](#development)
 - [Tests](#tests)
 - [License](#license)
@@ -722,6 +723,43 @@ http://your-host:8080/mcp/
 ```
 
 Stateless — every request is independent, no session juggling. Drop it into Claude Desktop, a custom agent, anything that speaks MCP over HTTP. Works out of the box.
+
+## Agent integrations
+
+The [skill](.agents/skills/telethon-plus) works in any agent that reads `.agents/skills/`, and installs natively in the clients below.
+
+### Claude Code
+
+```bash
+claude plugin marketplace add psyb0t/agents
+claude plugin install telethon-plus@psyb0t
+```
+
+Claude Code prompts for the telethon-plus server URL and, if auth is enabled, the bearer token — the token is stored in your OS keychain.
+
+### Codex
+
+```bash
+codex plugin marketplace add psyb0t/agents
+```
+
+Codex also picks the skill up automatically in any repo containing `.agents/skills/`, and invokes it as `$telethon-plus`.
+
+### OpenClaw
+
+The skill is published to ClawHub on every release:
+
+```bash
+openclaw skills install @psyb0t/telethon-plus
+```
+
+For MCP clients that speak local stdio, the [`@psyb0t/telethon-plus`](.agents/plugins/telethon-plus) plugin bridges to the service's `/mcp/` endpoint:
+
+```bash
+openclaw plugins install clawhub:@psyb0t/telethon-plus
+```
+
+Then set `TELETHON_PLUS_URL` (and `TELETHON_AUTH_KEY` if the server requires auth).
 
 ## Development
 

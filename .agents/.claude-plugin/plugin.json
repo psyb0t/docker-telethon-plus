@@ -1,0 +1,22 @@
+{
+  "name": "telethon-plus",
+  "description": "HTTP + MCP control plane over a real Telegram MTProto userbot (Telethon) — send/read/edit/delete/forward messages, dialogs, entities, media, chat admin, and polls, plus an incoming-message webhook.",
+  "author": { "name": "psyb0t", "url": "https://github.com/psyb0t" },
+  "homepage": "https://github.com/psyb0t/docker-telethon-plus",
+  "license": "WTFPL",
+  "keywords": ["telegram", "telethon", "userbot", "mtproto", "mcp", "webhook", "automation"],
+  "userConfig": {
+    "telethon_plus_url": {
+      "type": "string",
+      "title": "telethon-plus server URL",
+      "description": "Base URL of your running docker-telethon-plus server (TELETHON_PLUS_URL), e.g. http://localhost:8080",
+      "required": true
+    },
+    "telethon_auth_key": {
+      "type": "string",
+      "title": "telethon-plus auth key",
+      "description": "Bearer token (TELETHON_AUTH_KEY). Only needed if the server was started with authentication enabled.",
+      "sensitive": true
+    }
+  }
+}
