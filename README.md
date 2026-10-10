@@ -726,7 +726,7 @@ Stateless — every request is independent, no session juggling. Drop it into Cl
 
 ## Agent integrations
 
-The [skill](.agents/skills/telethon-plus) works in any agent that reads `.agents/skills/`, and installs natively in the clients below.
+The [skill](.agents/skills/telethon-plus) works in any agent that reads `.agents/skills/` (such as [peen](https://github.com/psyb0t/peen)), and installs natively in the clients below.
 
 ### Claude Code
 
