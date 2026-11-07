@@ -34,3 +34,4 @@ Dockerfile.dev
 sec.sarif
 .coverage
 .flake8
+docs/

@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.6.1, 2026-11-07
+
+The first published release with the v0.6.0 changes below. v0.6.0 was tagged, but its image build failed at the last step, so no `v0.6.0` image, GitHub release or registry entry exists.
+
+### Fixed
+
+- **Image builds failed while syncing the Docker Hub description.** Docker Hub refuses a long description over 25,000 bytes, and the README, which the build pushes there, had grown past that. The full HTTP API reference moved from the README to [docs/http-api.md](docs/http-api.md), and the README links to it.
+
 ## v0.6.0, 2026-11-07
 
 ### Fixed
