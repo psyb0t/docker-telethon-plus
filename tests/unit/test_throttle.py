@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-
-from app.throttle import BucketSpec, Throttler, ThrottleConfig
+from app.throttle import BucketSpec, ThrottleConfig, Throttler
 
 
 def _cfg(**overrides) -> ThrottleConfig:
@@ -65,9 +64,9 @@ async def test_per_chat_send_and_read_timelines_are_independent() -> None:
     await t.acquire("send", "chatA", chat_kind="send")
     await t.acquire("read", "chatA", chat_kind="read")
     elapsed = time.monotonic() - start
-    assert elapsed < 0.05, (
-        f"different timelines should not block each other; got {elapsed*1000:.0f}ms"
-    )
+    assert (
+        elapsed < 0.05
+    ), f"different timelines should not block each other; got {elapsed*1000:.0f}ms"
 
 
 async def test_read_per_chat_interval_enforced() -> None:
@@ -76,9 +75,9 @@ async def test_read_per_chat_interval_enforced() -> None:
     await t.acquire("read", "chatB", chat_kind="read")
     await t.acquire("read", "chatB", chat_kind="read")
     elapsed = time.monotonic() - start
-    assert 0.18 < elapsed < 0.30, (
-        f"two same-chat reads should wait ~200ms, got {elapsed*1000:.0f}ms"
-    )
+    assert (
+        0.18 < elapsed < 0.30
+    ), f"two same-chat reads should wait ~200ms, got {elapsed*1000:.0f}ms"
 
 
 async def test_send_per_chat_interval_enforced() -> None:
@@ -87,9 +86,9 @@ async def test_send_per_chat_interval_enforced() -> None:
     await t.acquire("send", "chatC", chat_kind="send")
     await t.acquire("send", "chatC", chat_kind="send")
     elapsed = time.monotonic() - start
-    assert 0.28 < elapsed < 0.40, (
-        f"two same-chat sends should wait ~300ms, got {elapsed*1000:.0f}ms"
-    )
+    assert (
+        0.28 < elapsed < 0.40
+    ), f"two same-chat sends should wait ~300ms, got {elapsed*1000:.0f}ms"
 
 
 async def test_per_chat_does_not_affect_other_chats() -> None:
@@ -173,12 +172,14 @@ async def test_record_extra_respects_zero_or_negative() -> None:
 
 
 async def test_disabled_throttler_is_a_noop() -> None:
-    t = Throttler(_cfg(
-        enabled=False,
-        per_chat_interval_ms=10000,
-        global_interval_ms=10000,
-        buckets={"read": BucketSpec(1, 60), "other": BucketSpec(1, 60)},
-    ))
+    t = Throttler(
+        _cfg(
+            enabled=False,
+            per_chat_interval_ms=10000,
+            global_interval_ms=10000,
+            buckets={"read": BucketSpec(1, 60), "other": BucketSpec(1, 60)},
+        )
+    )
     start = time.monotonic()
     for _ in range(5):
         await t.acquire("read", "any_chat", chat_kind="send")

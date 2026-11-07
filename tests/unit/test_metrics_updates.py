@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.metrics import MetricsRegistry, render
 from app.updates import CLOSE_SHUTDOWN, CLOSE_SLOW_SUBSCRIBER, UpdateBroker, event_payload_json
 
-
 # ---------- MetricsRegistry -------------------------------------------------
 
 
@@ -115,3 +114,33 @@ async def test_event_payload_json_round_trip() -> None:
     encoded = event_payload_json(payload)
     decoded = json.loads(encoded)
     assert decoded == payload
+
+
+async def test_each_event_is_named_by_its_builder() -> None:
+    """Regression: the payload type came from type(event).__name__, which is
+    "Event" for every Telethon event (they are nested <Builder>.Event
+    classes), so a client filtering on "NewMessage" never matched."""
+    from types import SimpleNamespace
+
+    from telethon import events
+
+    handlers = []
+
+    class FakeClient:
+        def add_event_handler(self, callback, builder) -> None:
+            handlers.append((type(builder).__name__, callback))
+
+    b = UpdateBroker(enabled=True, post_to_url="", post_to_timeout=1, buffer_size=10)
+    b.attach(FakeClient())  # type: ignore[arg-type]
+    q = b.subscribe()
+    event = SimpleNamespace(message=None, chat_id=-1001234567890)
+    for _, callback in handlers:
+        await callback(event)
+    sent = [q.get_nowait()["type"] for _ in range(q.qsize())]
+    assert [name for name, _ in handlers] == [
+        events.NewMessage.__name__,
+        events.MessageEdited.__name__,
+        events.MessageDeleted.__name__,
+        events.ChatAction.__name__,
+    ]
+    assert sent == ["NewMessage", "MessageEdited", "MessageDeleted", "ChatAction"]

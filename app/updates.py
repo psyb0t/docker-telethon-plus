@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
 
 import httpx
 from telethon import TelegramClient, events
@@ -37,13 +37,18 @@ Item = Union[Dict[str, Any], int]
 SubscriberQueue = asyncio.Queue[Item]
 
 
-def _event_to_dict(event: Any) -> Dict[str, Any]:
+def _event_to_dict(event: Any, kind: str) -> Dict[str, Any]:
     """Render a Telethon event as a plain JSON-safe dict.
 
     Conservative: emits a small known-shape payload, no raw TL objects.
     Subscribers can hit /api/messages or /api/entities for full detail.
+
+    ``kind`` is the event builder's name (NewMessage, MessageEdited, ...).
+    It cannot come from the event: every Telethon event class is a nested
+    ``<Builder>.Event``, so ``type(event).__name__`` is "Event" for all of
+    them.
     """
-    payload: Dict[str, Any] = {"type": type(event).__name__}
+    payload: Dict[str, Any] = {"type": kind}
 
     msg = getattr(event, "message", None)
     if msg is not None:
@@ -55,13 +60,10 @@ def _event_to_dict(event: Any) -> Dict[str, Any]:
             "sender_id": getattr(msg, "sender_id", None),
             "chat_id": getattr(event, "chat_id", None),
             "reply_to_msg_id": (
-                msg.reply_to.reply_to_msg_id
-                if getattr(msg, "reply_to", None) else None
+                msg.reply_to.reply_to_msg_id if getattr(msg, "reply_to", None) else None
             ),
             "media": getattr(msg, "media", None) is not None,
-            "media_type": (
-                type(msg.media).__name__ if getattr(msg, "media", None) else None
-            ),
+            "media_type": (type(msg.media).__name__ if getattr(msg, "media", None) else None),
         }
 
     # Specifics by event subclass
@@ -109,28 +111,24 @@ class UpdateBroker:
             return
         self._client = client
 
-        @client.on(events.NewMessage)
-        async def _on_new(event: Any) -> None:
-            self._dispatch(_event_to_dict(event))
-
-        @client.on(events.MessageEdited)
-        async def _on_edit(event: Any) -> None:
-            self._dispatch(_event_to_dict(event))
-
-        @client.on(events.MessageDeleted)
-        async def _on_delete(event: Any) -> None:
-            self._dispatch(_event_to_dict(event))
-
-        @client.on(events.ChatAction)
-        async def _on_chat_action(event: Any) -> None:
-            self._dispatch(_event_to_dict(event))
+        for builder in (
+            events.NewMessage,
+            events.MessageEdited,
+            events.MessageDeleted,
+            events.ChatAction,
+        ):
+            client.add_event_handler(self._handler(builder.__name__), builder())
 
         if self._post_to_url:
             self._webhook_queue = asyncio.Queue(maxsize=self._buffer_size)
-            self._webhook_task = asyncio.create_task(
-                self._webhook_worker(), name="updates-webhook"
-            )
+            self._webhook_task = asyncio.create_task(self._webhook_worker(), name="updates-webhook")
             log.info("update webhook enabled → %s", self._post_to_url)
+
+    def _handler(self, kind: str) -> Callable[[Any], Awaitable[None]]:
+        async def _on_event(event: Any) -> None:
+            self._dispatch(_event_to_dict(event, kind))
+
+        return _on_event
 
     def _dispatch(self, payload: Dict[str, Any]) -> None:
         # WS subscribers
@@ -163,7 +161,9 @@ class UpdateBroker:
                 payload = await self._webhook_queue.get()
                 try:
                     resp = await http.post(self._post_to_url, json=payload)
-                    if resp.status_code >= 500:
+                    # Any non-2xx loses the event: nothing retries it, and
+                    # httpx does not follow redirects here.
+                    if not resp.is_success:
                         log.warning(
                             "webhook %s returned %d — event dropped",
                             self._post_to_url,

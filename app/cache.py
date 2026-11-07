@@ -6,9 +6,14 @@ forces every `resolveUsername` call again — that's the operation most
 likely to trigger long FLOOD_WAITs.
 
 This cache is a simple JSON file keyed by both `@username` and numeric
-ID, holding everything needed to skip the resolveUsername call and feed
-Telethon directly via `client.get_entity(id)` (which works once the
-entity is in Telethon's in-memory entity DB after a prior resolve).
+ID. Each record carries the entity's id, type and access_hash, which is
+enough to skip the resolveUsername call and build an InputPeer for
+`client.get_entity(...)`. The StringSession keeps no entities across a
+restart, so an id alone would not resolve.
+
+Access hashes are only valid for the account that saw them, so the file also
+records the account id (bind_account); a file from another account, or one
+that predates the account id, is dropped.
 
 The cache is best-effort: corrupt file = start fresh, write failures =
 log and continue.
@@ -26,6 +31,12 @@ from typing import Any, Dict, Optional
 
 log = logging.getLogger(__name__)
 
+# Record field holding the entity's access_hash.
+ACCESS_HASH_FIELD = "access_hash"
+# Top-level file key holding the account id. Telegram usernames start with a
+# letter, so it cannot collide with a cache key.
+ACCOUNT_ID_KEY = "_account_id"
+
 
 class EntityCache:
     """JSON-backed cache. Thread-safe (but used from a single asyncio loop)."""
@@ -35,6 +46,8 @@ class EntityCache:
         self._ttl = ttl_seconds
         self._enabled = enabled
         self._data: Dict[str, Dict[str, Any]] = {}
+        # Account the loaded entries belong to; None for a file without one.
+        self._account_id: Optional[int] = None
         self._lock = RLock()
         if enabled:
             self._load()
@@ -45,12 +58,44 @@ class EntityCache:
         try:
             with open(self._path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            if isinstance(data, dict):
-                self._data = data
-                log.info("entity cache loaded: %d entries from %s", len(data), self._path)
-        except (OSError, json.JSONDecodeError) as exc:
+        # json.JSONDecodeError and UnicodeDecodeError are both ValueErrors.
+        except (OSError, ValueError) as exc:
             log.warning("entity cache load failed (%s) — starting fresh", exc)
             self._data = {}
+            return
+        if not isinstance(data, dict):
+            return
+        account_id = data.pop(ACCOUNT_ID_KEY, None)
+        self._account_id = account_id if isinstance(account_id, int) else None
+        self._data = {k: v for k, v in data.items() if isinstance(v, dict)}
+        skipped = len(data) - len(self._data)
+        if skipped:
+            log.warning("entity cache: skipped %d malformed entries in %s", skipped, self._path)
+        log.info("entity cache loaded: %d entries from %s", len(self._data), self._path)
+
+    def bind_account(self, account_id: int) -> None:
+        """Tie the cache to one account, dropping entries cached for another.
+
+        A file that records a different account, or none (written before the
+        account id was stored), is cleared: access hashes are per account and
+        another account's would fail or point at the wrong peer.
+        """
+        if not self._enabled:
+            return
+        with self._lock:
+            if self._account_id == account_id:
+                return
+            dropped = len(self._data)
+            self._data = {}
+            self._account_id = account_id
+            if dropped == 0:
+                return
+            log.warning(
+                "entity cache belonged to another account or predates account binding;"
+                " dropped %d entries",
+                dropped,
+            )
+            self._save()
 
     def _save(self) -> None:
         if not self._enabled:
@@ -61,11 +106,16 @@ class EntityCache:
             with tempfile.NamedTemporaryFile(
                 "w", dir=directory, delete=False, encoding="utf-8"
             ) as tmp:
-                json.dump(self._data, tmp)
+                json.dump(self._file_content(), tmp)
                 tmp_path = tmp.name
             os.replace(tmp_path, self._path)
         except OSError as exc:
             log.warning("entity cache save failed: %s", exc)
+
+    def _file_content(self) -> Dict[str, Any]:
+        if self._account_id is None:
+            return dict(self._data)
+        return {**self._data, ACCOUNT_ID_KEY: self._account_id}
 
     @staticmethod
     def _normalize_key(raw: str) -> str:
@@ -144,8 +194,9 @@ class EntityCache:
             val = getattr(entity, attr, None)
             if val is not None:
                 rec[attr] = val
-        # access_hash is mtproto-private — Telethon won't accept it from us
-        # for input_peer construction across restarts safely, so we don't
-        # store it. We rely on Telethon's session for that and use the cache
-        # purely as a "we've seen this handle before, skip resolve" hint.
+        # A min entity's hash only works for downloading files, and Telethon
+        # refuses it for anything else, so it is not worth caching.
+        access_hash = getattr(entity, ACCESS_HASH_FIELD, None)
+        if isinstance(access_hash, int) and getattr(entity, "min", False) is not True:
+            rec[ACCESS_HASH_FIELD] = access_hash
         return rec

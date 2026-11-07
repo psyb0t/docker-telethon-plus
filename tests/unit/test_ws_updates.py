@@ -105,3 +105,47 @@ async def test_shutdown_closes_open_clients(stack: _Stack) -> None:
             await asyncio.wait_for(ws.recv(), 3)
         assert closed.value.rcvd is not None
         assert closed.value.rcvd.code == CLOSE_SHUTDOWN
+
+
+async def test_a_wrong_token_refuses_the_websocket_handshake(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route closes before accepting, which reaches the client as an HTTP
+    403 on the handshake, not as a close code: the docs say exactly that."""
+    from websockets.exceptions import InvalidStatus
+
+    monkeypatch.setenv("TELETHON_AUTH_KEY", "right-key")
+    # base_env turns updates off, and a missing route is also refused with
+    # 403; the right-key connect below proves the route exists.
+    monkeypatch.setenv("TELETHON_UPDATES_ENABLED", "true")
+    import app.server as server_mod
+    from app.client import TelethonHolder
+    from app.config import Config
+
+    class OfflineHolder(TelethonHolder):
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(server_mod, "TelethonHolder", OfflineHolder)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            server_mod.build_app(Config.from_env()), host="127.0.0.1", port=0, log_level="error"
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        with pytest.raises(InvalidStatus) as refused:
+            async with connect(f"ws://127.0.0.1:{port}/ws/updates?token=wrong"):
+                pass
+        assert refused.value.response.status_code == 403
+        async with connect(f"ws://127.0.0.1:{port}/ws/updates?token=right-key"):
+            pass
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, 10)

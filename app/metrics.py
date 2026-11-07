@@ -70,61 +70,77 @@ def render(
     snap = registry.snapshot()
     blocks: List[str] = []
 
-    blocks.append(_fmt(
-        "telethon_plus_uptime_seconds",
-        "Process uptime in seconds.",
-        "counter",
-        [("", snap["uptime_seconds"])],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_uptime_seconds",
+            "Process uptime in seconds.",
+            "counter",
+            [("", snap["uptime_seconds"])],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_tool_calls_total",
-        "Total tool invocations (successful or otherwise).",
-        "counter",
-        [(_lbl(tool=t), v) for t, v in snap["tool_calls"].items()],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_tool_calls_total",
+            "Total tool invocations (successful or otherwise).",
+            "counter",
+            [(_lbl(tool=t), v) for t, v in snap["tool_calls"].items()],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_tool_errors_total",
-        "Total tool invocations that raised an exception.",
-        "counter",
-        [(_lbl(tool=t), v) for t, v in snap["tool_errors"].items()],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_tool_errors_total",
+            "Total tool invocations that raised an exception.",
+            "counter",
+            [(_lbl(tool=t), v) for t, v in snap["tool_errors"].items()],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_flood_events_total",
-        "FLOOD_WAIT events observed, by throttle bucket.",
-        "counter",
-        [(_lbl(bucket=b), v) for b, v in snap["flood_events"].items()],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_flood_events_total",
+            "FLOOD_WAIT events observed, by throttle bucket.",
+            "counter",
+            [(_lbl(bucket=b), v) for b, v in snap["flood_events"].items()],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_cache_hits_total",
-        "Entity cache hits.",
-        "counter",
-        [("", snap["cache"]["hits"])],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_cache_hits_total",
+            "Entity cache hits.",
+            "counter",
+            [("", snap["cache"]["hits"])],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_cache_misses_total",
-        "Entity cache misses.",
-        "counter",
-        [("", snap["cache"]["misses"])],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_cache_misses_total",
+            "Entity cache misses.",
+            "counter",
+            [("", snap["cache"]["misses"])],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_cache_entries",
-        "Entries currently in entity cache.",
-        "gauge",
-        [("", cache_state.get("entries", 0))],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_cache_entries",
+            "Entries currently in entity cache.",
+            "gauge",
+            [("", cache_state.get("entries", 0))],
+        )
+    )
 
-    blocks.append(_fmt(
-        "telethon_plus_throttle_multiplier",
-        "Current adaptive backoff multiplier.",
-        "gauge",
-        [("", float(throttle_state.get("multiplier", 1.0)))],
-    ))
+    blocks.append(
+        _fmt(
+            "telethon_plus_throttle_multiplier",
+            "Current adaptive backoff multiplier.",
+            "gauge",
+            [("", float(throttle_state.get("multiplier", 1.0)))],
+        )
+    )
 
     buckets = throttle_state.get("buckets", {}) or {}
     samples_used = []
@@ -133,18 +149,22 @@ def render(
         samples_used.append((_lbl(bucket=name), info.get("used", 0)))
         samples_limit.append((_lbl(bucket=name), info.get("limit", 0)))
     if samples_used:
-        blocks.append(_fmt(
-            "telethon_plus_bucket_used",
-            "Current bucket usage in its window.",
-            "gauge",
-            samples_used,
-        ))
-        blocks.append(_fmt(
-            "telethon_plus_bucket_limit",
-            "Bucket capacity per window.",
-            "gauge",
-            samples_limit,
-        ))
+        blocks.append(
+            _fmt(
+                "telethon_plus_bucket_used",
+                "Current bucket usage in its window.",
+                "gauge",
+                samples_used,
+            )
+        )
+        blocks.append(
+            _fmt(
+                "telethon_plus_bucket_limit",
+                "Bucket capacity per window.",
+                "gauge",
+                samples_limit,
+            )
+        )
 
     return "\n".join(blocks)
 

@@ -2,28 +2,40 @@
 
 [![CI](https://github.com/psyb0t/docker-telethon-plus/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/psyb0t/docker-telethon-plus/actions/workflows/pipeline.yml)
 [![version](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/version.svg)](https://github.com/psyb0t/docker-telethon-plus/releases)
-[![license](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/license.svg)](LICENSE)
+[![license](https://raw.githubusercontent.com/psyb0t/docker-telethon-plus/badges/license.svg)](https://github.com/psyb0t/docker-telethon-plus/blob/main/LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/psyb0t/telethon-plus?style=flat-square)](https://hub.docker.com/r/psyb0t/telethon-plus)
 
-Your Telegram account, but it takes HTTP requests. Wraps [Telethon](https://codeberg.org/Lonami/Telethon) — the real MTProto userbot client, not that neutered Bot API garbage — behind a JSON HTTP API and a Model Context Protocol endpoint.
+Your Telegram account, but it takes HTTP requests. Wraps [Telethon](https://codeberg.org/Lonami/Telethon), the real MTProto userbot client and not that neutered Bot API garbage, behind a JSON HTTP API and a Model Context Protocol endpoint.
 
-Same tools, two doors. POST some JSON, or point your AI agent at `/mcp` and let it go nuts. Either way it's talking to Telegram as *you*, with full account access.
+Same tools, two doors. POST some JSON, or point your AI agent at `/mcp/` and let it go nuts. Either way it's talking to Telegram as *you*, with full account access.
 
 One login. One session string. Never type a code again.
 
 ## Table of Contents
 
+- [Documentation](#documentation)
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
-- [First-time login](#first-time-login)
-- [Configuration](#configuration)
-- [Tools](#tools)
-- [HTTP API](#http-api)
-- [MCP](#mcp)
 - [Agent integrations](#agent-integrations)
-- [Development](#development)
-- [Tests](#tests)
 - [License](#license)
+
+## Documentation
+
+The full documentation is at **[psyb0t.github.io/docker-telethon-plus](https://psyb0t.github.io/docker-telethon-plus/)**.
+
+| You want to | Read |
+| --- | --- |
+| Log in once and get the container answering | [Getting started](https://psyb0t.github.io/docker-telethon-plus/getting-started/) |
+| Set an environment variable, a proxy or the port | [Configuration](https://psyb0t.github.io/docker-telethon-plus/configuration/) |
+| See every tool, its route and its parameters | [Tools](https://psyb0t.github.io/docker-telethon-plus/tools/) |
+| Call the REST API: auth, responses, errors, examples | [HTTP API](https://psyb0t.github.io/docker-telethon-plus/http-api/) |
+| Hook up Claude, Codex or another agent | [MCP and agents](https://psyb0t.github.io/docker-telethon-plus/mcp/) |
+| Receive incoming messages live or by webhook | [Updates and webhooks](https://psyb0t.github.io/docker-telethon-plus/updates/) |
+| Keep the account from getting rate-limited or banned | [Throttling and cache](https://psyb0t.github.io/docker-telethon-plus/throttling/) |
+| Watch metrics, flood state and health | [Observability](https://psyb0t.github.io/docker-telethon-plus/observability/) |
+| Lock it down before exposing it | [Security](https://psyb0t.github.io/docker-telethon-plus/security/) |
+| Fix a startup error or a failing call | [Troubleshooting](https://psyb0t.github.io/docker-telethon-plus/troubleshooting/) |
+| Change the code, run the tests, cut a release | [Development](https://psyb0t.github.io/docker-telethon-plus/development/) |
 
 ## How it works
 
@@ -38,39 +50,11 @@ One login. One session string. Never type a code again.
 +-------------------+        +-----------------------+
 ```
 
-One Telethon client. One async lock. Both surfaces share the same tool registry — no duplication, no weird state, no bullshit.
+One Telethon client. One async lock. Both surfaces share the same tool registry, so there is no duplication, no weird state, no bullshit. On top of that sits a flood guard (per-method buckets, per-chat gaps, adaptive backoff and an entity cache) that keeps the account under Telegram's limits; [Throttling and cache](https://psyb0t.github.io/docker-telethon-plus/throttling/) has the details.
 
 ## Quick start
 
-```yaml
-services:
-  telethon-plus:
-    image: psyb0t/telethon-plus
-    ports:
-      - "8080:8080"
-    environment:
-      TELETHON_API_ID: "123456"
-      TELETHON_API_HASH: "your-api-hash"
-      TELETHON_SESSION: "1Aa...long-string-from-login-helper..."
-    restart: unless-stopped
-```
-
-Get `API_ID` / `API_HASH` from <https://my.telegram.org/apps>. Get the session string from the [login helper](#first-time-login) below.
-
-## First-time login
-
-Telegram makes you prove you're a human once — phone number, SMS code, optionally 2FA. Do it once, never again.
-
-```bash
-cp .env.example .env
-$EDITOR .env  # put in TELETHON_API_ID and TELETHON_API_HASH
-
-make login
-```
-
-`make login` builds the image, runs the interactive flow, and shoves `TELETHON_SESSION` straight into your `.env`. That's it. Run `make run` and you're live.
-
-No repo? No problem:
+Get `API_ID` / `API_HASH` from <https://my.telegram.org/apps>, then log in once. Telegram makes you prove you're a human once: phone number, login code, optionally 2FA. The login prints a session string:
 
 ```bash
 docker run --rm -it \
@@ -79,274 +63,39 @@ docker run --rm -it \
   psyb0t/telethon-plus login
 ```
 
-Copy the session string it spits out, set it as `TELETHON_SESSION`, done.
+Then run it with that string:
 
-> **The session string is full account access.** Whoever has it is you. Don't commit it, don't paste it in Slack, don't tattoo it anywhere.
+```yaml
+services:
+  telethon-plus:
+    image: psyb0t/telethon-plus
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      TELETHON_API_ID: "123456"
+      TELETHON_API_HASH: "your-api-hash"
+      TELETHON_SESSION: "1Aa...long-string-from-login..."
+      TELETHON_AUTH_KEY: "a-long-random-string"
+    volumes:
+      - telethon-cache:/cache
+    restart: unless-stopped
 
-## Configuration
-
-All config via environment variables. Copy `.env.example` to get the full list with comments.
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `TELETHON_API_ID` | yes | — | API ID from my.telegram.org |
-| `TELETHON_API_HASH` | yes | — | API hash from my.telegram.org |
-| `TELETHON_SESSION` | yes | — | StringSession from the login helper |
-| `TELETHON_HTTP_LISTEN_ADDRESS` | no | `0.0.0.0:8080` | `host:port` to bind |
-| `TELETHON_LOG_LEVEL` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `TELETHON_REQUEST_TIMEOUT` | no | `60` | Per-request timeout in seconds |
-| `TELETHON_FLOOD_SLEEP_THRESHOLD` | no | `60` | Auto-sleep through `FLOOD_WAIT` errors below this many seconds; longer ones raise. Telegram will rate-limit you, this is the safety valve. Set very high (e.g. `86400`) to never raise, but then a hostile `FLOOD_WAIT` blocks the process for its full length. |
-| `TELETHON_DEVICE_MODEL` | no | `docker-telethon-plus` | What Telegram thinks your device is |
-| `TELETHON_SYSTEM_VERSION` | no | `1.0` | Ditto for OS |
-| `TELETHON_APP_VERSION` | no | `1.0` | Ditto for app |
-| `TELETHON_DOWNLOAD_DIR` | no | `/tmp/telethon-plus` | Scratch space for `send_file` uploads. Each upload gets a private temp file there that is deleted after the send, whether it worked or not. |
-| `TELETHON_AUTH_KEY` | no | `""` | When set, all endpoints require `Authorization: Bearer <key>`. `/healthz` stays public. Empty = no auth. |
-| `TELETHON_PROXY` | no | `""` | Connect to Telegram through a proxy: `socks5://`, `socks4://` or `http://`, as `scheme://[user:password@]host:port` (percent-encode special characters in the user and password). Hostnames are resolved by the proxy. An invalid value stops the container at startup. |
-| `TELETHON_READ_ONLY` | no | `false` | Refuse every write. See [Safety switches](#safety-switches). |
-| `TELETHON_DRY_RUN` | no | `false` | Validate writes and echo them back without calling Telegram. See [Safety switches](#safety-switches). |
-| `TELETHON_LOG_JSON` | no | `false` | Log JSON lines instead of plain text. |
-| `TELETHON_METRICS_ENABLED` | no | `true` | Serve Prometheus metrics at `/metrics`. |
-| `TELETHON_UPDATES_ENABLED` | no | `true` | Register incoming-event handlers and serve `/ws/updates`. See [Updates / webhooks](#updates--webhooks). |
-| `TELETHON_UPDATES_BUFFER_SIZE` | no | `256` | Events queued per `/ws/updates` client and for the webhook. |
-| `TELETHON_POST_TO_URL` | no | `""` | POST every incoming event to this URL as JSON. |
-| `TELETHON_POST_TO_TIMEOUT` | no | `10` | Timeout in seconds for each webhook POST. |
-
-### Throttling & cache (anti-flood)
-
-Telegram bans accounts that hammer it. Defaults here are conservative — meant to keep you under the server-side limits without you having to think about it. Tune only if you know what you're doing.
-
-| Variable | Default | What it does |
-|---|---|---|
-| `TELETHON_THROTTLE_ENABLED` | `true` | Master switch for all rate-limiting below |
-| `TELETHON_THROTTLE_GLOBAL_INTERVAL_MS` | `50` | Min gap between any two outgoing requests |
-| `TELETHON_THROTTLE_JITTER_MS` | `200` | Random ±jitter added on top (kills metronome traffic patterns) |
-| `TELETHON_THROTTLE_PER_CHAT_INTERVAL_MS` | `1100` | Min gap between sends to the same chat (Telegram's "1/sec/chat" ceiling, with margin) |
-| `TELETHON_THROTTLE_PER_CHAT_READ_INTERVAL_MS` | `250` | Min gap between reads from the same chat. Stops single-channel scraping from monopolizing the read bucket. |
-| `TELETHON_THROTTLE_ADAPTIVE` | `true` | On each `FLOOD_WAIT`, multiply all waits ×2 for an hour. Resets after a quiet hour. |
-| `TELETHON_BUCKET_RESOLVE_PER_MIN` | `5` | Cap on `resolveUsername` — **the main thing that gets accounts 22-hour-banned** |
-| `TELETHON_BUCKET_GET_FULL_PER_MIN` | `10` | Cap on `getFullChannel` / `getFullUser` / `get_participants` |
-| `TELETHON_BUCKET_JOIN_PER_HOUR` | `5` | Cap on channel/group joins |
-| `TELETHON_BUCKET_CREATE_PER_HOUR` | `5` | Cap on channel/group creation |
-| `TELETHON_BUCKET_SEND_PER_MIN` | `20` | Cap on sends across all chats |
-| `TELETHON_BUCKET_READ_PER_MIN` | `600` | Cap on read ops. **Counted per server-side API call**, not per tool call: `get_messages(limit=300)` charges 3 slots (Telegram caps GetHistory at 100/page); `get_dialogs(limit=500)` similarly charges 5. |
-| `TELETHON_CACHE_ENABLED` | `true` | Persist resolved entities to disk |
-| `TELETHON_CACHE_PATH` | `/cache/entities.json` | Mount `/cache` as a host volume to keep this across rebuilds |
-| `TELETHON_CACHE_TTL_SECONDS` | `604800` | 7 days. Set `0` for no expiry. |
-
-**How the layers stack:**
-
-1. Entity cache short-circuits resolveUsername — first lookup of `@somechannel` calls Telegram; every subsequent lookup is free. Survives container restarts via the `/cache` volume.
-2. Per-method token buckets cap the dangerous methods. If you try to resolve 6 new usernames in one minute, the 6th sleeps until the oldest expires.
-3. Per-chat send interval throttles sends to each chat to ≤1/sec (with margin).
-4. Global gap + jitter humanizes the overall traffic shape.
-5. Adaptive backoff: a single FLOOD_WAIT halves your effective rate for an hour. Three in a row → ÷8. Auto-recovers after an idle hour.
-
-**For bulk scraping work** (the scenario that caused 22-hour bans before): the cache + `bucket_resolve_per_min=5` combination is what saves you. Resolving 200 new channels takes ~40 minutes instead of getting you banned in 5.
-
-## Tools
-
-JSON in, JSON out. All inputs are pydantic-validated — send garbage, get a `400` back with exactly what's wrong.
-
-Chat references (`chat`, `from_chat`, `to_chat`) accept whatever Telethon accepts:
-
-| Format | Example |
-|---|---|
-| Username | `@psyb0t` |
-| Phone number | `+1234567890` |
-| t.me link | `https://t.me/psyb0t` |
-| Numeric ID | `123456789` |
-| Supergroup/channel ID | `-1001234567890` |
-| Your own Saved Messages | `me` |
-
-> **Numeric IDs only resolve for entities Telethon has already seen** — i.e. cached in your session via a prior `@username` / `t.me` lookup, dialog list, or incoming message. MTProto needs an `access_hash`, not just an ID, and bare numbers don't carry one. Especially relevant for bots: pass `@botusername` first (or call `GET /api/dialogs` / `GET /api/entities?chat=@bot` once) before referring to it by numeric ID. If you only have the bot's token and no username, hit Telegram's Bot API `getMe` to fetch the username, then use that.
-
-### Response shape
-
-Every 2xx returns the resource directly. No `{"result": ...}` wrapper, no envelope. Lists are JSON arrays, singles are JSON objects.
-
-Errors return `{"detail": "..."}` (FastAPI standard). Telegram RPC errors arrive as `502` with `detail = {"telegram_error": "...", "message": "..."}`.
-
-### Quick reference
-
-| Endpoint | Required params | What it does |
-|---|---|---|
-| `GET /api/me` | — | Account profile. |
-| `GET /api/entities` | `chat` | Resolve a username/ID/link to a profile. |
-| `POST /api/entities/bulk` | `chats` | Bulk resolve, honoring the resolve-username bucket. |
-| `GET /api/dialogs` | — | List dialogs. Optional: `limit`, `archived`, `search` (substring on title/@). |
-| `GET /api/messages` | `chat` | Read recent messages. Optional: `limit`, `offset_id`, `search`. |
-| `GET /api/messages/{id}` | `chat` | Fetch a single message. |
-| `GET /api/messages/{id}/media` | `chat` | Download attachment as **raw bytes** (binary stream). Returns `Content-Type` from Telegram + `Content-Disposition: attachment; filename=...`. Optional: `max_bytes`. MCP clients should use the `download_media` tool which returns base64. |
-| `POST /api/messages` | `chat`, **`text` or `file_url`** | Send a message. If `file_url` is present, fetches it and sends as media (with `text` as caption). Otherwise sends `text`. Optional: `parse_mode`, `reply_to`, `silent`, `link_preview`, `schedule`, `force_document`, `max_bytes`. |
-| `POST /api/messages/forward` | `from_chat`, `to_chat`, `message_ids` | Forward messages. |
-| `POST /api/messages/read` | `chat` | Mark as read. Optional `max_id`. |
-| `PATCH /api/messages/{id}` | `chat`, `text` | Edit. |
-| `DELETE /api/messages` | `chat`, `message_ids` | Bulk delete (body has the list). |
-| `POST /api/messages/{id}/pin` | `chat` | Pin. Optional `silent`, `pm_oneside`. |
-| `POST /api/messages/{id}/unpin` | `chat` | Unpin. |
-| `POST /api/messages/{id}/reactions` | `chat`, `emoji` | React. Optional `big`. |
-| `DELETE /api/messages/{id}/reactions` | `chat` | Remove your reaction. |
-| `GET /api/participants` | `chat` | List members. Optional: `limit`, `search`. |
-| `POST /api/chats` | `title` | Create supergroup or channel. |
-| `DELETE /api/chats` | `chat` | Delete supergroup/channel you own (body). |
-| `POST /api/chats/join` | `chat` | Join public channel/group. |
-| `POST /api/chats/invite` | `invite` | Join via private `t.me/+hash`. |
-| `POST /api/chats/leave` | `chat` | Leave. |
-| `GET /api/chats/{chat}/linked` | — | Resolve a channel's linked discussion group. |
-| `POST /api/chats/{chat}/admin/ban` | `user` | Ban a user. Optional `until_seconds`. |
-| `POST /api/chats/{chat}/admin/unban` | `user` | Lift a ban. |
-| `POST /api/chats/{chat}/admin/kick` | `user` | Kick (ban + immediate unban). |
-| `POST /api/chats/{chat}/admin/promote` | `user` | Grant admin rights + optional `title`. |
-| `POST /api/chats/{chat}/admin/demote` | `user` | Strip admin rights. |
-| `POST /api/polls` | `chat`, `question`, `options` | Create a poll. Optional `quiz`, `correct_option`, `solution`. |
-| `POST /api/polls/{id}/vote` | `chat`, `options` | Vote (0-based indices). |
-| `GET /api/polls/{id}/results` | `chat` | Current vote counts. |
-| `GET /api/throttle/status` | — | Live rate-limit + cache state. |
-| `GET /api/account/health` | — | Flood-risk tier. |
-| `GET /metrics` | — | Prometheus exposition (no auth). |
-| `WS /ws/updates` | `?token=...` | Stream incoming Telegram events. |
-
-**`{chat}` in path** accepts the same formats as elsewhere: `@username`, numeric ID, `me`. Phone (`+...`) and `t.me/...` links need URL-encoding (`%2B` etc.) — usernames and IDs work inline.
-
-## HTTP API
-
-Standard REST API. JSON in, JSON out. 2xx returns the resource directly; errors return `{"detail": ...}`. If `TELETHON_AUTH_KEY` is set, every request except `/healthz` needs `Authorization: Bearer <key>`.
-
-Every route with its parameters, request bodies, responses and errors is in [docs/http-api.md](docs/http-api.md). The [Quick reference](#quick-reference) above lists them all on one screen.
-
-## Observability
-
-### `GET /metrics`
-
-Prometheus exposition. Scrape it. No auth (publicly readable inside your cluster — if you need it locked down, put it behind your usual scrape-network policy).
-
-Series exported:
-- `telethon_plus_tool_calls_total{tool=...}`
-- `telethon_plus_tool_errors_total{tool=...}`
-- `telethon_plus_flood_events_total{bucket=...}`
-- `telethon_plus_cache_hits_total` / `_misses_total` / `_entries`
-- `telethon_plus_throttle_multiplier`
-- `telethon_plus_bucket_used{bucket=...}` / `_bucket_limit{bucket=...}`
-- `telethon_plus_uptime_seconds`
-
-### `GET /api/throttle/status`
-
-Live state of every bucket, multiplier, recent flood events, cache stats:
-
-```json
-{
-  "throttle": {
-    "enabled": true,
-    "adaptive": true,
-    "multiplier": 1.0,
-    "flood_events_1h": 0,
-    "buckets": {
-      "resolve_username": {"used": 0, "limit": 5, "window_seconds": 60},
-      "send": {"used": 0, "limit": 20, "window_seconds": 60}
-    },
-    "tracked_chats_send": 12,
-    "tracked_chats_read": 30,
-    "global_interval_ms": 50,
-    "per_chat_interval_ms": 1100,
-    "per_chat_read_interval_ms": 250,
-    "jitter_ms": 200
-  },
-  "cache": {"entries": 247},
-  "read_only": false,
-  "dry_run": false
-}
+volumes:
+  telethon-cache:
 ```
 
-### `GET /api/account/health`
-
-```json
-{
-  "authorized": true,
-  "risk": "ok",
-  "multiplier": 1.0,
-  "flood_events_1h": 0,
-  "read_only": false,
-  "dry_run": false
-}
+```bash
+export TELETHON_AUTH_KEY=a-long-random-string  # the key from the compose file
+curl -H "Authorization: Bearer $TELETHON_AUTH_KEY" http://127.0.0.1:8080/api/me
 ```
 
-`risk` is `ok` (multiplier 1×), `warning` (≥2×), or `high` (≥8×).
+> **The session string is full account access.** Whoever has it is you. Don't commit it, don't paste it in Slack, don't tattoo it anywhere. Without `TELETHON_AUTH_KEY`, anyone who reaches the port is you too. Read [Security](https://psyb0t.github.io/docker-telethon-plus/security/) before exposing it.
 
-### Throttle response headers
-
-Every `/api/...` response carries:
-- `X-Throttle-Multiplier`
-- `X-Throttle-Flood-Events-1h`
-- `X-RateLimit-Remaining-<bucket>` for each bucket
-
-Lets clients self-throttle without polling `/api/throttle/status`.
-
-## Updates / webhooks
-
-Two ways to receive incoming Telegram events (new messages, edits, deletes, chat actions):
-
-### WebSocket — `/ws/updates`
-
-```javascript
-const ws = new WebSocket('ws://your-host:8080/ws/updates?token=YOUR_AUTH_KEY');
-ws.onmessage = (e) => console.log(JSON.parse(e.data));
-```
-
-If `TELETHON_AUTH_KEY` is set, pass it as `?token=`. Browser WS clients can't set Authorization headers, hence query-string.
-
-Multiple subscribers are supported, each with its own queue of `TELETHON_UPDATES_BUFFER_SIZE` events. A client that falls a whole buffer behind is disconnected with close code `1013` (try again later). It has lost events, so reconnect and read what you missed with `GET /api/messages`. When the server stops, open clients are closed with `1001`.
-
-### Outbound webhook — `TELETHON_POST_TO_URL`
-
-Set the env var to your endpoint and every event gets `POST`ed there as JSON. Fire-and-forget — a slow or failing webhook never blocks Telethon's loop. Use for distributed workers, separate processes, anything that can't hold a WS open.
-
-### Event payload shape
-
-```json
-{
-  "type": "NewMessage",
-  "message": {
-    "id": 4242,
-    "date": "2026-04-29T12:00:00+00:00",
-    "text": "hi",
-    "out": false,
-    "sender_id": 12345,
-    "chat_id": -1001234567890,
-    "reply_to_msg_id": null,
-    "media": false,
-    "media_type": null
-  },
-  "chat_id": -1001234567890
-}
-```
-
-For `MessageEdited`, `MessageDeleted`, `ChatAction` — same shape, fewer fields.
-
-## Safety switches
-
-### `TELETHON_READ_ONLY=true`
-
-Every write endpoint returns `403`. Reads, status, metrics still work. Killswitch for panic mode or for keeping a test deployment harmless.
-
-### `TELETHON_DRY_RUN=true`
-
-Write endpoints accept the request, validate it, **don't** call Telegram, return `{"dry_run": true, "would_...": {...}}`. Useful for verifying scripts before pointing them at production.
-
-## MCP
-
-Mounted at `/mcp/` using the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Every tool from the table above shows up automatically as an MCP tool with the same name and schema.
-
-Point your agent at:
-
-```
-http://your-host:8080/mcp/
-```
-
-Stateless — every request is independent, no session juggling. Drop it into Claude Desktop, a custom agent, anything that speaks MCP over HTTP. Works out of the box.
+From a checkout, `make login` writes the session string into `.env` and `make run` starts the container. [Getting started](https://psyb0t.github.io/docker-telethon-plus/getting-started/) has every step.
 
 ## Agent integrations
 
-The [skill](.agents/skills/telethon-plus) works in any agent that reads `.agents/skills/` (such as [peen](https://github.com/psyb0t/peen)), and installs natively in the clients below.
+The [skill](https://github.com/psyb0t/docker-telethon-plus/tree/main/.agents/skills/telethon-plus) works in any agent that reads `.agents/skills/` (such as [peen](https://github.com/psyb0t/peen)), and installs natively in the clients below.
 
 ### Claude Code
 
@@ -355,7 +104,7 @@ claude plugin marketplace add psyb0t/agents
 claude plugin install telethon-plus@psyb0t
 ```
 
-Claude Code prompts for the telethon-plus server URL and, if auth is enabled, the bearer token — the token is stored in your OS keychain.
+Claude Code prompts for the telethon-plus server URL and, if auth is enabled, the bearer token, which it keeps in your OS keychain.
 
 ### Codex
 
@@ -374,7 +123,7 @@ The skill is published to ClawHub on every release:
 openclaw skills install @psyb0t/telethon-plus
 ```
 
-For MCP clients that speak local stdio, the [`@psyb0t/telethon-plus`](.agents/plugins/telethon-plus) plugin bridges to the service's `/mcp/` endpoint:
+For MCP clients that speak local stdio, the [`@psyb0t/telethon-plus`](https://github.com/psyb0t/docker-telethon-plus/tree/main/.agents/plugins/telethon-plus) plugin bridges to the service's `/mcp/` endpoint:
 
 ```bash
 openclaw plugins install clawhub:@psyb0t/telethon-plus
@@ -382,51 +131,6 @@ openclaw plugins install clawhub:@psyb0t/telethon-plus
 
 Then set `TELETHON_PLUS_URL` (and `TELETHON_AUTH_KEY` if the server requires auth).
 
-## Development
-
-Everything except `build`, `run` and `login` runs in a dev image (`Dockerfile.dev`) with the locked environment baked in, so the host needs only Docker and make.
-
-```bash
-make build        # build psyb0t/telethon-plus:latest
-make run          # run locally on :8080 (reads .env)
-make login        # interactive login, writes TELETHON_SESSION to .env automatically
-make lint         # flake8 + mypy
-make format       # isort + black
-make test-unit    # unit tests with coverage, no Docker or Telegram needed
-make test         # integration tests against a real Telegram account
-make sec          # semgrep + bandit + pip-audit into sec.sarif (reports, never fails)
-make audit        # pip-audit on the locked runtime dependencies (fails on a finding)
-make clean        # remove built images
-```
-
-Dependencies live in `pyproject.toml` and `uv.lock`. `[tool.uv] exclude-newer` keeps any release from the last seven days out of the lock; change dependencies with `make pkg-add`, `make pkg-update`, `make pkg-remove` or `make pkg-upgrade`, which move that date to seven days ago first. CI runs `make lint`, `make test-unit` and `make sec` on every push to main and every pull request.
-
-## Tests
-
-Real tests. Real Telegram. No mocking bullshit.
-
-`tests/` spins up the container and hammers both REST and MCP with your actual account. Messages get sent and deleted. If anything breaks, you'll know.
-
-Setup:
-
-```bash
-cp .env.example .env
-$EDITOR .env  # needs TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION, TEST_CHAT
-
-make test
-```
-
-`TEST_CHAT` is where test messages land. Use `me` for Saved Messages — private, yours, no one else sees it. All chat reference formats from the [Tools](#tools) section work here.
-
-`make test` builds the image and runs pytest in the dev image with the Docker socket mounted. No setup beyond `.env`. If credentials are missing, the suite skips cleanly.
-
-| Test file | What it beats on |
-|---|---|
-| `test_health.py` | Container boots, auth succeeds, OpenAPI spec has all the routes. |
-| `test_rest.py` | Validation errors, extra fields rejected, send → edit → fetch → delete roundtrip, dialogs, entity resolution, public channel read, group create/delete, participants. |
-| `test_mcp.py` | MCP streamable HTTP: tool discovery, `get_me`, send + delete roundtrip, validation errors come back as `isError`. |
-| `test_auth.py` | Auth middleware: 401 on missing/wrong token, 200 on correct token, `/healthz` always public, MCP endpoint protected too. |
-
 ## License
 
-[WTFPL](LICENSE) — do whatever the fuck you want.
+Copyright (C) 2026 Ciprian Mandache. Licensed under the [GNU General Public License, version 2 or later](https://github.com/psyb0t/docker-telethon-plus/blob/main/LICENSE). The image includes [hachoir](https://github.com/vstinner/hachoir), which is GPL v2 only, so the image as a whole is distributed under GPL v2.

@@ -15,7 +15,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
+from telethon.tl.types import Channel, ChatPhotoEmpty
 
 # ---------- get_messages pagination ----------------------------------------
 
@@ -30,9 +30,7 @@ async def test_get_messages_pages_below_threshold_makes_one_call(
         return_value=[make_message(i) for i in range(10, 0, -1)]
     )
 
-    params = REGISTRY["get_messages"].params_model.model_validate(
-        {"chat": "@known", "limit": 10}
-    )
+    params = REGISTRY["get_messages"].params_model.model_validate({"chat": "@known", "limit": 10})
     # populate cache so resolve_entity skips resolveUsername bucket
     holder.cache.put("@known", make_entity(1, username="known"))
 
@@ -98,15 +96,13 @@ async def test_get_messages_consumes_one_bucket_slot_per_page(
 
     used_before = holder.throttle.snapshot()["buckets"]["read"]["used"]
 
-    params = REGISTRY["get_messages"].params_model.model_validate(
-        {"chat": "@chan", "limit": 150}
-    )
+    params = REGISTRY["get_messages"].params_model.model_validate({"chat": "@chan", "limit": 150})
     await REGISTRY["get_messages"].handler(holder, params)
 
     used_after = holder.throttle.snapshot()["buckets"]["read"]["used"]
-    assert used_after - used_before == 2, (
-        f"two server calls should charge two slots; delta={used_after - used_before}"
-    )
+    assert (
+        used_after - used_before == 2
+    ), f"two server calls should charge two slots; delta={used_after - used_before}"
 
 
 # ---------- read-only -------------------------------------------------------
@@ -123,9 +119,7 @@ async def test_read_only_blocks_send_with_permission_error(cfg, monkeypatch, mak
     holder._client.get_entity = AsyncMock(return_value=make_entity(1))
     holder.cache.put("@x", make_entity(1, username="x"))
 
-    params = REGISTRY["send_message"].params_model.model_validate(
-        {"chat": "@x", "text": "hi"}
-    )
+    params = REGISTRY["send_message"].params_model.model_validate({"chat": "@x", "text": "hi"})
     with pytest.raises(PermissionError):
         await REGISTRY["send_message"].handler(holder, params)
     # Telegram must not have been touched.
@@ -204,6 +198,7 @@ async def test_bulk_resolve_isolates_per_handle_errors(holder, make_entity) -> N
 
 async def test_throttle_status_returns_live_snapshot(holder) -> None:
     from app.tools import REGISTRY
+
     params = REGISTRY["throttle_status"].params_model.model_validate({})
     result = await REGISTRY["throttle_status"].handler(holder, params)
     assert "throttle" in result
@@ -214,6 +209,7 @@ async def test_throttle_status_returns_live_snapshot(holder) -> None:
 
 async def test_account_health_risk_tiers(holder) -> None:
     from app.tools import REGISTRY
+
     params = REGISTRY["account_health"].params_model.model_validate({})
 
     # baseline = ok
@@ -257,9 +253,9 @@ async def test_get_dialogs_records_extra_pages(holder, make_entity) -> None:
 
     used_after = holder.throttle.snapshot()["buckets"]["read"]["used"]
     # 1 for the initial acquire() + 1 record_extra for the 2nd page server hit
-    assert used_after - used_before == 2, (
-        f"expected 2 read slots (1 acquire + 1 extra), delta={used_after - used_before}"
-    )
+    assert (
+        used_after - used_before == 2
+    ), f"expected 2 read slots (1 acquire + 1 extra), delta={used_after - used_before}"
 
 
 # ---------- adaptive backoff fires on FloodWaitError -----------------------
@@ -268,19 +264,16 @@ async def test_get_dialogs_records_extra_pages(holder, make_entity) -> None:
 async def test_flood_wait_error_notifies_throttler(holder, make_entity) -> None:
     """A FloodWaitError raised from inside guard() must update the multiplier."""
     from telethon.errors import FloodWaitError
+
     from app.tools import REGISTRY
 
     holder._client.get_entity = AsyncMock(return_value=make_entity(1))
     holder.cache.put("@chan", make_entity(1, username="chan"))
 
     # send_message will hit the AsyncMock with a side effect that raises
-    holder._client.send_message = AsyncMock(
-        side_effect=FloodWaitError(request=None, capture=20)
-    )
+    holder._client.send_message = AsyncMock(side_effect=FloodWaitError(request=None, capture=20))
 
-    params = REGISTRY["send_message"].params_model.model_validate(
-        {"chat": "@chan", "text": "spam"}
-    )
+    params = REGISTRY["send_message"].params_model.model_validate({"chat": "@chan", "text": "spam"})
     with pytest.raises(FloodWaitError):
         await REGISTRY["send_message"].handler(holder, params)
 
@@ -288,3 +281,41 @@ async def test_flood_wait_error_notifies_throttler(holder, make_entity) -> None:
     snap = holder.throttle.snapshot()
     assert snap["multiplier"] == 2.0
     assert snap["flood_events_1h"] == 1
+
+
+def _supergroup() -> Channel:
+    """Banning needs a real channel entity; a MagicMock is rejected."""
+    return Channel(
+        id=100, title="group", photo=ChatPhotoEmpty(), date=None, megagroup=True, access_hash=1
+    )
+
+
+async def test_a_timed_ban_ends_that_many_seconds_from_now(holder) -> None:
+    """Regression: until_seconds went into ChatBannedRights.until_date as is,
+    an absolute 1970 timestamp that Telegram reads as a permanent ban."""
+    import datetime as dt
+
+    from app.tools import REGISTRY
+
+    holder._client.get_entity = AsyncMock(return_value=_supergroup())
+    holder._client.return_value = None
+    tool = REGISTRY["ban_user"]
+    params = tool.params_model.model_validate(
+        {"chat": "@testgroup", "user": "@testuser", "until_seconds": 3600}
+    )
+    before = dt.datetime.now(dt.timezone.utc)
+    await tool.handler(holder, params)
+    request = holder._client.await_args.args[0]
+    until = request.banned_rights.until_date
+    assert before + dt.timedelta(seconds=3590) < until < before + dt.timedelta(seconds=3610)
+
+
+async def test_a_ban_without_seconds_is_permanent(holder) -> None:
+    from app.tools import REGISTRY
+
+    holder._client.get_entity = AsyncMock(return_value=_supergroup())
+    holder._client.return_value = None
+    tool = REGISTRY["ban_user"]
+    params = tool.params_model.model_validate({"chat": "@testgroup", "user": "@testuser"})
+    await tool.handler(holder, params)
+    assert holder._client.await_args.args[0].banned_rights.until_date is None

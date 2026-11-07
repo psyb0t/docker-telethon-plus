@@ -357,6 +357,15 @@ wheels = [
 ]
 
 [[package]]
+name = "hachoir"
+version = "3.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/a6/ffacc0937524aeff27d20c981e5f321aedd284daf66aca7d52c707fa2d93/hachoir-3.4.0.tar.gz", hash = "sha256:7f88018d58ef42b5dcd8ff51f2a6191abf3ade38eee8da11acd93f5a7d9cf8f8", size = 7536245, upload-time = "2026-09-13T15:07:27.209Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/3c/a1ea410b41cf69e1a2b42cb28fca44f53f567490ba398bb832315ce39d83/hachoir-3.4.0-py3-none-any.whl", hash = "sha256:042708fd1364ba6629d8516430a2c424b4b115e449e331dd431e5e4bd87d1001", size = 655014, upload-time = "2026-09-13T15:07:24.845Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1020,6 +1029,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "cryptg" },
     { name = "fastapi" },
+    { name = "hachoir" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "pydantic" },
@@ -1044,6 +1054,7 @@ dev = [
 requires-dist = [
     { name = "cryptg", specifier = "==0.6.0" },
     { name = "fastapi", specifier = "==0.162.0" },
+    { name = "hachoir", specifier = "==3.4.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==1.30.0" },
     { name = "pydantic", specifier = "==2.14.2" },

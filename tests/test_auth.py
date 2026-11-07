@@ -7,9 +7,7 @@ from typing import Iterator
 
 import httpx
 import pytest
-
-from conftest import IMAGE, CONTAINER, _free_port, _wait_ready, _stop_container
-
+from conftest import CONTAINER, IMAGE, _free_port, _stop_container, _wait_ready
 
 AUTH_KEY = "test-auth-key-do-not-use-in-prod"
 
@@ -19,13 +17,22 @@ def _start_authed_container(env: dict[str, str]) -> str:
     port = _free_port()
     subprocess.run(
         [
-            "docker", "run", "-d", "--rm",
-            "--name", CONTAINER,
-            "-p", f"{port}:8080",
-            "-e", f"TELETHON_API_ID={env['TELETHON_API_ID']}",
-            "-e", f"TELETHON_API_HASH={env['TELETHON_API_HASH']}",
-            "-e", f"TELETHON_SESSION={env['TELETHON_SESSION']}",
-            "-e", f"TELETHON_AUTH_KEY={AUTH_KEY}",
+            "docker",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            CONTAINER,
+            "-p",
+            f"{port}:8080",
+            "-e",
+            f"TELETHON_API_ID={env['TELETHON_API_ID']}",
+            "-e",
+            f"TELETHON_API_HASH={env['TELETHON_API_HASH']}",
+            "-e",
+            f"TELETHON_SESSION={env['TELETHON_SESSION']}",
+            "-e",
+            f"TELETHON_AUTH_KEY={AUTH_KEY}",
             IMAGE,
         ],
         check=True,

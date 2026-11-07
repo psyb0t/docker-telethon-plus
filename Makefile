@@ -6,6 +6,10 @@ DEV_IMAGE  := psyb0t/telethon-plus-dev:latest
 PYPROJECT := pyproject.toml
 BUMP_HOST := bash scripts/bump_exclude_newer.sh $(PYPROJECT)
 PY_SOURCES := app login.py tests
+# Unit test coverage of app/ below this fails make test-unit, and with it CI.
+# Measured 95% on 2026-11-07; raise it as coverage grows, never lower it to
+# make a red build pass.
+COVERAGE_FLOOR := 93
 
 -include .env
 export
@@ -47,7 +51,7 @@ DEV_RUN_DIND := docker run --rm \
 	$(DEV_IMAGE)
 
 .PHONY: all help dev-image shell build build-test run login \
-        test test-unit lint format sec audit \
+        test test-unit lint format sec audit docs \
         pkg-lock pkg-upgrade pkg-add pkg-remove pkg-update clean
 
 all: build ## Build image
@@ -102,7 +106,7 @@ test: build-test dev-image ## Run the integration tests against a real Telegram 
 	$(DEV_RUN_DIND) pytest -c pytest.ini
 
 test-unit: dev-image ## Run the unit tests with coverage (no Docker, no Telegram)
-	$(DEV_RUN) pytest tests/unit/ -c tests/unit/pytest.ini --cov=app --cov-report=term-missing:skip-covered
+	$(DEV_RUN) pytest tests/unit/ -c tests/unit/pytest.ini --cov=app --cov-report=term-missing:skip-covered --cov-fail-under=$(COVERAGE_FLOOR)
 
 lint: dev-image ## Lint Python sources (flake8 + mypy)
 	$(DEV_RUN) flake8 $(PY_SOURCES)
@@ -117,6 +121,17 @@ sec: dev-image ## Security scan (semgrep + bandit + pip-audit) -> sec.sarif for 
 
 audit: dev-image ## Check the locked runtime dependencies for advisories (fails on a finding)
 	$(DEV_RUN) sh -ec 'uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt >/dev/null; pip-audit --no-deps --disable-pip -r /tmp/requirements.txt'
+
+# The GitHub Pages build of docs/, with the image GitHub itself uses, into a
+# gitignored directory. Pages serves it under /docker-telethon-plus/.
+DOCS_BUILD_IMAGE := ghcr.io/actions/jekyll-build-pages:v1.0.13
+DOCS_OUT := .testing/docs-site
+
+docs: ## Build the documentation site locally into .testing/docs-site
+	docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e GITHUB_WORKSPACE=/work \
+		-e GITHUB_REPOSITORY=psyb0t/docker-telethon-plus -e INPUT_SOURCE=docs \
+		-e INPUT_DESTINATION=$(DOCS_OUT) -e INPUT_VERBOSE=false \
+		-v $(PWD):/work $(DOCS_BUILD_IMAGE)
 
 # Every dependency change bumps [tool.uv] exclude-newer to seven days ago
 # first, so the supply-chain age gate is anchored to the moment of the change.

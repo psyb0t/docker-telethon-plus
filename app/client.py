@@ -5,34 +5,105 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
-from telethon.tl.types import PeerChannel, PeerChat, PeerUser
+from telethon.tl.types import InputPeerChannel, InputPeerUser, PeerChat
 
-from app.cache import EntityCache
-from app.config import Config
+from app.cache import ACCESS_HASH_FIELD, EntityCache
+from app.config import Config, telethon_log_level
 from app.metrics import MetricsRegistry
 from app.throttle import BucketSpec, ThrottleConfig, Throttler
 from app.updates import UpdateBroker
 
-
-def _peer_from_cached(cached: dict) -> Any:
-    """Wrap cached id with the right Peer type so telethon doesn't default
-    to PeerUser when handed a bare positive int — required to hit telethon's
-    session DB without a fresh ResolveUsername round-trip."""
-    eid = int(cached["id"])
-    etype = cached.get("type") or ""
-    if etype in ("Channel", "ChannelFull"):
-        return PeerChannel(eid)
-    if etype in ("Chat", "ChatFull"):
-        return PeerChat(eid)
-    return PeerUser(eid)
-
-
 log = logging.getLogger(__name__)
+
+# Telethon logs the flood waits it sleeps through itself (those at or under
+# flood_sleep_threshold) from this logger, as an INFO record built by
+# telethon.client.users._fmt_flood: msg template plus the args
+# (" early" or "", seconds, timedelta, request class name).
+TELETHON_USERS_LOGGER = "telethon.client.users"
+_TELETHON_FLOOD_SLEEP_MSG = "Sleeping%s for %ds (%s) on %s flood wait"
+_TELETHON_FLOOD_SECONDS_ARG = 1
+_TELETHON_FLOOD_ARG_COUNT = 4
+# Throttle bucket and metric label for waits Telethon slept through, which
+# belong to no bucket of ours.
+TELETHON_SLEEP_BUCKET = "telethon_sleep"
+
+_CHANNEL_TYPES = ("Channel", "ChannelFull")
+_CHAT_TYPES = ("Chat", "ChatFull")
+_USER_TYPES = ("User", "UserFull")
+
+
+def _peer_from_cached(cached: Dict[str, Any]) -> Optional[Any]:
+    """Peer Telethon can resolve from a cache record, or None when the record
+    cannot name one.
+
+    Users and channels need their access_hash: the StringSession keeps no
+    entities across a restart, so a bare id would fail with ValueError. Basic
+    groups are addressed by id alone. Records without a usable hash (stored
+    before hashes were cached, or entities Telegram gave none for) count as a
+    miss and are resolved fresh.
+    """
+    eid = cached.get("id")
+    if not isinstance(eid, int):
+        return None
+    etype = cached.get("type") or ""
+    if etype in _CHAT_TYPES:
+        return PeerChat(eid)
+    access_hash = cached.get(ACCESS_HASH_FIELD)
+    if not isinstance(access_hash, int):
+        return None
+    if etype in _CHANNEL_TYPES:
+        return InputPeerChannel(eid, access_hash)
+    if etype in _USER_TYPES:
+        return InputPeerUser(eid, access_hash)
+    return None
+
+
+class _TelethonFloodObserver(logging.Filter):
+    """Feeds the flood waits Telethon sleeps through into the throttler and
+    the metrics.
+
+    Telethon sleeps through any FLOOD_WAIT up to flood_sleep_threshold without
+    raising, so guard() never sees it and neither the adaptive backoff nor the
+    flood counters would. Its only trace is an INFO log record, which this
+    filter reads. It runs on a logger lowered to INFO for that reason, then
+    drops what the "telethon" logger would have hidden, so the extra INFO
+    records never reach a handler.
+    """
+
+    def __init__(
+        self,
+        throttle: Throttler,
+        metrics: MetricsRegistry,
+        visible_level: int,
+    ) -> None:
+        super().__init__()
+        self._throttle = throttle
+        self._metrics = metrics
+        self._visible_level = visible_level
+
+    @staticmethod
+    def _flood_seconds(record: logging.LogRecord) -> Optional[float]:
+        if record.levelno != logging.INFO or record.msg != _TELETHON_FLOOD_SLEEP_MSG:
+            return None
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != _TELETHON_FLOOD_ARG_COUNT:
+            return None
+        seconds = args[_TELETHON_FLOOD_SECONDS_ARG]
+        if not isinstance(seconds, (int, float)):
+            return None
+        return float(seconds)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        seconds = self._flood_seconds(record)
+        if seconds is not None:
+            self._throttle.notify_flood(seconds, TELETHON_SLEEP_BUCKET)
+            self._metrics.record_flood(TELETHON_SLEEP_BUCKET)
+        return record.levelno >= self._visible_level
 
 
 def _build_throttle_config(cfg: Config) -> ThrottleConfig:
@@ -82,6 +153,8 @@ class TelethonHolder:
             post_to_timeout=cfg.post_to_timeout,
             buffer_size=cfg.updates_buffer_size,
         )
+        self._flood_observer: Optional[_TelethonFloodObserver] = None
+        self._users_logger_level = logging.NOTSET
 
     @property
     def client(self) -> TelegramClient:
@@ -135,11 +208,18 @@ class TelethonHolder:
         join, create, send, read, other). `chat_key` enforces the per-chat
         min interval; `chat_kind` ("send" or "read") picks which timeline.
 
+        The bucket and per-chat slots are taken before the holder lock, so a
+        long wait for one chat does not block calls for other chats. The
+        global gap, and a per-chat check against the real send times, run
+        inside the lock: requests queued on it would otherwise fire back to
+        back once a long call released it.
+
         On FloodWaitError, we record the event for adaptive backoff before
         re-raising. Other RPCErrors pass through.
         """
-        await self._throttle.acquire(bucket, chat_key, chat_kind=chat_kind)
+        await self._throttle.reserve(bucket, chat_key, chat_kind=chat_kind)
         async with self._lock:
+            await self._throttle.pace(chat_key, chat_kind=chat_kind)
             try:
                 yield self.client
             except FloodWaitError as exc:
@@ -164,25 +244,43 @@ class TelethonHolder:
             self._cache.put(stripped, entity)
             return entity
 
-        # Cache hit: ask Telethon by id (cheap — uses its in-memory DB).
-        cached = self._cache.get(stripped)
-        if cached:
-            self._metrics.record_cache(hit=True)
-            try:
-                async with self.guard("other"):
-                    entity = await self.client.get_entity(_peer_from_cached(cached))
-                # Refresh entry so TTL slides forward.
-                self._cache.put(stripped, entity)
-                return entity
-            except Exception as exc:  # noqa: BLE001 — fall back to fresh resolve
-                log.debug("cache hit miss-resolve, refreshing: %s", exc)
-                self._cache.invalidate(stripped)
+        entity = await self._resolve_from_cache(stripped)
+        if entity is not None:
+            return entity
 
         # True miss — burns a resolve_username slot.
         self._metrics.record_cache(hit=False)
         async with self.guard("resolve_username"):
             entity = await self.client.get_entity(stripped)
         self._cache.put(stripped, entity)
+        return entity
+
+    async def _resolve_from_cache(self, key: str) -> Optional[Any]:
+        """Entity for a cached handle, or None when the caller must resolve it
+        fresh.
+
+        The lookup is one getUsers/getChannels/getChats call by id and access
+        hash, not a resolveUsername. Only Telethon's ValueError ("Could not
+        find the input entity") falls back to a fresh resolve; a flood wait or
+        a network error says nothing about the entry and propagates.
+        """
+        cached = self._cache.get(key)
+        if not cached:
+            return None
+        peer = _peer_from_cached(cached)
+        if peer is None:
+            log.debug("cached entry has no usable peer, resolving fresh: %s", key)
+            return None
+        try:
+            async with self.guard("other"):
+                entity = await self.client.get_entity(peer)
+        except ValueError as exc:
+            log.debug("cache hit miss-resolve, refreshing: %s", exc)
+            self._cache.invalidate(key)
+            return None
+        self._metrics.record_cache(hit=True)
+        # Refresh entry so TTL slides forward.
+        self._cache.put(key, entity)
         return entity
 
     async def start(self) -> None:
@@ -209,14 +307,17 @@ class TelethonHolder:
         if not await client.is_user_authorized():
             await client.disconnect()
             raise RuntimeError(
-                "TELETHON_SESSION is not authorized — generate a fresh one with "
-                "the login helper (see README)."
+                "TELETHON_SESSION is not authorized; generate a fresh one with the "
+                "login command: https://psyb0t.github.io/docker-telethon-plus/getting-started/"
             )
 
         self._client = client
+        self._observe_telethon_flood_sleeps()
         self._updates.attach(client)
         me = await client.get_me()
         log.info("authorized as id=%s username=%s", me.id, me.username)
+        # Access hashes are per account, so the cache file belongs to one.
+        self._cache.bind_account(me.id)
         log.info(
             "throttle=%s adaptive=%s cache=%s (%d entries) updates=%s read_only=%s dry_run=%s",
             self._cfg.throttle_enabled,
@@ -228,10 +329,32 @@ class TelethonHolder:
             self._cfg.dry_run,
         )
 
+    def _observe_telethon_flood_sleeps(self) -> None:
+        users_logger = logging.getLogger(TELETHON_USERS_LOGGER)
+        self._users_logger_level = users_logger.level
+        self._flood_observer = _TelethonFloodObserver(
+            self._throttle,
+            self._metrics,
+            visible_level=telethon_log_level(self._cfg.log_level),
+        )
+        users_logger.addFilter(self._flood_observer)
+        # The flood record is INFO and "telethon" runs at WARNING or above, so
+        # without this the record would never be created.
+        users_logger.setLevel(logging.INFO)
+
+    def _stop_observing_telethon_flood_sleeps(self) -> None:
+        if self._flood_observer is None:
+            return
+        users_logger = logging.getLogger(TELETHON_USERS_LOGGER)
+        users_logger.removeFilter(self._flood_observer)
+        users_logger.setLevel(self._users_logger_level)
+        self._flood_observer = None
+
     async def stop(self) -> None:
         if self._client is None:
             return
         log.info("disconnecting Telethon client")
+        self._stop_observing_telethon_flood_sleeps()
         await self._updates.stop()
         await self._client.disconnect()
         self._client = None

@@ -36,6 +36,8 @@ WORKDIR /app
 
 COPY app/ /app/app/
 COPY login.py /app/login.py
+# GPL v2 requires a copy of the license with every distributed copy.
+COPY LICENSE /app/LICENSE
 
 RUN chown -R telethon-plus:telethon-plus /app && touch /session && chmod 666 /session \
     && mkdir -p /cache && chown telethon-plus:telethon-plus /cache && chmod 700 /cache

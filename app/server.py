@@ -40,15 +40,17 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Awaitable, Dict, Optional, TypeVar
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ValidationError
-from telethon.errors import RPCError
+from telethon.errors import FloodWaitError, RPCError
 
 from app.client import TelethonHolder
 from app.config import Config
@@ -63,6 +65,18 @@ _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Paths that bypass the read-only check (informational endpoints that
 # happen to use POST for body-carrying).
 _READONLY_BYPASS_PATHS = {"/api/entities/bulk"}
+
+# Telegram's flood wait, as HTTP: Too Many Requests, with Retry-After.
+_HTTP_TOO_MANY_REQUESTS = 429
+_HEADER_RETRY_AFTER = "Retry-After"
+
+# Characters dropped from the ASCII filename fallback: they end the quoted
+# string. Control characters (CR and LF included) are dropped as unprintable.
+_FILENAME_QUOTING_CHARS = '"\\'
+# Stands in for a non-ASCII character in the ASCII filename fallback.
+_FILENAME_FALLBACK_CHAR = "_"
+
+_T = TypeVar("_T")
 
 
 def _model_to_signature(model: ParamsModel) -> inspect.Signature:
@@ -95,22 +109,111 @@ def _validate_params(tool: Tool, raw: Any) -> BaseModel:
         raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
 
-async def _invoke(holder: TelethonHolder, tool: Tool, params: BaseModel) -> Any:
-    holder.metrics.record_tool_call(tool.name)
-    try:
-        return await tool.handler(holder, params)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except RPCError as exc:
-        holder.metrics.record_tool_error(tool.name)
-        log.warning("telegram RPC error in %s: %s", tool.name, exc)
-        raise HTTPException(
+# type/subtype as RFC 6838 allows them. The sender of a document picks its
+# MIME type, so anything else (parameters, non-ASCII, garbage) is served as
+# an opaque download rather than echoed into a response header.
+_MEDIA_TYPE_PART = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}"
+_MEDIA_TYPE_RE = re.compile(rf"^{_MEDIA_TYPE_PART}/{_MEDIA_TYPE_PART}$")
+_FALLBACK_MEDIA_TYPE = "application/octet-stream"
+
+
+def _safe_media_type(raw: Any) -> str:
+    value = str(raw or "").strip()
+    return value if _MEDIA_TYPE_RE.match(value) else _FALLBACK_MEDIA_TYPE
+
+
+def _http_error(exc: Exception) -> Optional[HTTPException]:
+    """HTTP answer for an exception a tool handler raised, or None for an
+    unexpected one, which is left to propagate as a 500."""
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, FloodWaitError):
+        # Checked before RPCError, its base class.
+        return HTTPException(
+            status_code=_HTTP_TOO_MANY_REQUESTS,
+            detail={
+                "telegram_error": exc.__class__.__name__,
+                "message": str(exc),
+                "seconds": exc.seconds,
+            },
+            headers={_HEADER_RETRY_AFTER: str(exc.seconds)},
+        )
+    if isinstance(exc, RPCError):
+        return HTTPException(
             status_code=502,
             detail={"telegram_error": exc.__class__.__name__, "message": str(exc)},
-        ) from exc
-    except ValueError as exc:
-        holder.metrics.record_tool_error(tool.name)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        )
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return None
+
+
+def _mcp_error(exc: Exception) -> Optional[Dict[str, Any]]:
+    """MCP answer for an exception a tool handler raised, or None for an
+    unexpected one, which is left to propagate."""
+    if isinstance(exc, PermissionError):
+        return {"error": "read_only", "message": str(exc)}
+    if isinstance(exc, FloodWaitError):
+        # Checked before RPCError, its base class.
+        return {"error": "flood_wait", "seconds": exc.seconds, "message": str(exc)}
+    if isinstance(exc, RPCError):
+        return {
+            "error": "telegram_rpc",
+            "type": exc.__class__.__name__,
+            "message": str(exc),
+        }
+    if isinstance(exc, ValueError):
+        return {"error": "invalid_argument", "message": str(exc)}
+    return None
+
+
+async def _call_counted(holder: TelethonHolder, tool_name: str, call: Awaitable[_T]) -> _T:
+    """Await a tool call, counting the call and every exception it raises, so
+    the REST routes and the MCP wrapper report the same error metrics."""
+    holder.metrics.record_tool_call(tool_name)
+    try:
+        return await call
+    # Broad on purpose: the count covers unexpected exceptions too, and
+    # everything is re-raised or mapped to its answer below.
+    except Exception as exc:
+        holder.metrics.record_tool_error(tool_name)
+        mapped = _http_error(exc)
+        if mapped is None:
+            raise
+        if isinstance(exc, RPCError):
+            log.warning("telegram RPC error in %s: %s", tool_name, exc)
+        raise mapped from exc
+
+
+async def _invoke(holder: TelethonHolder, tool: Tool, params: BaseModel) -> Any:
+    return await _call_counted(holder, tool.name, tool.handler(holder, params))
+
+
+def _ascii_fallback_filename(filename: str) -> str:
+    return "".join(
+        ch if ch.isascii() else _FILENAME_FALLBACK_CHAR
+        for ch in filename
+        if ch.isprintable() and ch not in _FILENAME_QUOTING_CHARS
+    )
+
+
+def _content_disposition(filename: str) -> str:
+    """Content-Disposition for a sender-chosen filename.
+
+    Header values are Latin-1, so the plain `filename` is an ASCII fallback
+    with the quoting characters removed; `filename*` (RFC 5987) carries the
+    real name percent-encoded.
+    """
+    return (
+        f'attachment; filename="{_ascii_fallback_filename(filename)}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
+
+
+def _token_matches(presented: bytes, expected: str) -> bool:
+    """Constant-time comparison. compare_digest raises TypeError on a str with
+    non-ASCII characters, so both sides are compared as bytes."""
+    return secrets.compare_digest(presented, expected.encode())
 
 
 async def _parse_body(request: Request) -> dict:
@@ -160,19 +263,14 @@ def _mount_mcp_tool(mcp: FastMCP, holder: TelethonHolder, tool: Tool) -> None:
         try:
             params = params_model.model_validate(kwargs)
             return await tool.handler(holder, params)
-        except PermissionError as exc:
+        # Broad on purpose: the count covers unexpected exceptions too, and
+        # those are re-raised below.
+        except Exception as exc:
             holder.metrics.record_tool_error(tool.name)
-            return {"error": "read_only", "message": str(exc)}
-        except RPCError as exc:
-            holder.metrics.record_tool_error(tool.name)
-            return {
-                "error": "telegram_rpc",
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            }
-        except ValueError as exc:
-            holder.metrics.record_tool_error(tool.name)
-            return {"error": "invalid_argument", "message": str(exc)}
+            answer = _mcp_error(exc)
+            if answer is None:
+                raise
+            return answer
 
     _call.__name__ = tool.name
     _call.__doc__ = tool.description
@@ -206,22 +304,8 @@ def build_app(cfg: Config) -> FastAPI:
 
     # ---- Middleware ----------------------------------------------------
 
-    if cfg.auth_key:
-        @app.middleware("http")
-        async def _auth(request: Request, call_next: Any) -> Response:
-            if request.url.path in ("/healthz", "/metrics"):
-                return await call_next(request)
-            header = request.headers.get("Authorization", "")
-            token = header.removeprefix("Bearer ").strip()
-            if not secrets.compare_digest(token, cfg.auth_key):
-                return Response(
-                    content='{"detail":"unauthorized"}',
-                    status_code=401,
-                    media_type="application/json",
-                )
-            return await call_next(request)
-
     if cfg.read_only:
+
         @app.middleware("http")
         async def _readonly(request: Request, call_next: Any) -> Response:
             if (
@@ -252,6 +336,30 @@ def build_app(cfg: Config) -> FastAPI:
                 log.debug("throttle header injection failed", exc_info=True)
         return response
 
+    # Starlette puts the middleware added last outermost. Auth goes last so an
+    # unauthenticated request is refused before anything else touches it, and
+    # its 401 carries none of the X-Throttle-* / X-RateLimit-* headers, which
+    # describe the account's state.
+    if cfg.auth_key:
+
+        @app.middleware("http")
+        async def _auth(request: Request, call_next: Any) -> Response:
+            if request.url.path in ("/healthz", "/metrics"):
+                return await call_next(request)
+            # Starlette decodes header values as Latin-1; encoding back gives
+            # the bytes the client sent, which are UTF-8 for a non-ASCII key.
+            # Stripping bytes leaves out the Latin-1 whitespace (U+0085,
+            # U+00A0) that a UTF-8 sequence can end in.
+            header = request.headers.get("Authorization", "").encode("latin-1")
+            token = header.removeprefix(b"Bearer ").strip()
+            if not _token_matches(token, cfg.auth_key):
+                return Response(
+                    content='{"detail":"unauthorized"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+            return await call_next(request)
+
     # ---- System --------------------------------------------------------
 
     @app.get("/healthz")
@@ -259,6 +367,7 @@ def build_app(cfg: Config) -> FastAPI:
         return {"status": "ok", "authorized": holder._client is not None}
 
     if cfg.metrics_enabled:
+
         @app.get("/metrics")
         async def metrics() -> PlainTextResponse:
             body = render_metrics(
@@ -349,25 +458,18 @@ def build_app(cfg: Config) -> FastAPI:
             max_bytes = int(request.query_params.get("max_bytes", 50 * 1024 * 1024))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"invalid max_bytes: {exc}") from exc
-        holder.metrics.record_tool_call("download_media")
-        try:
-            info = await download_media_bytes(holder, chat, message_id, max_bytes)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except RPCError as exc:
-            holder.metrics.record_tool_error("download_media")
-            raise HTTPException(
-                status_code=502,
-                detail={"telegram_error": exc.__class__.__name__, "message": str(exc)},
-            ) from exc
-        except ValueError as exc:
-            holder.metrics.record_tool_error("download_media")
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        info = await _call_counted(
+            holder,
+            "download_media",
+            download_media_bytes(holder, chat, message_id, max_bytes),
+        )
         return Response(
             content=info["data"],
-            media_type=info["mime_type"],
+            media_type=_safe_media_type(info["mime_type"]),
             headers={
-                "Content-Disposition": f'attachment; filename="{info["filename"]}"',
+                # The type comes from the sender; never let a browser guess.
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": _content_disposition(info["filename"]),
                 "X-Media-Type": info["media_type"],
                 "Content-Length": str(info["size"]),
             },
@@ -476,11 +578,12 @@ def build_app(cfg: Config) -> FastAPI:
     # ---- WebSocket updates --------------------------------------------
 
     if cfg.updates_enabled:
+
         @app.websocket("/ws/updates")
         async def ws_updates(ws: WebSocket) -> None:
             if cfg.auth_key:
                 token = ws.query_params.get("token", "")
-                if not secrets.compare_digest(token, cfg.auth_key):
+                if not _token_matches(token.encode(), cfg.auth_key):
                     await ws.close(code=4401)
                     return
             await ws.accept()

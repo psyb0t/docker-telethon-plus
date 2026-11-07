@@ -32,9 +32,7 @@ def _load_env() -> dict[str, str]:
     values: dict[str, str] = {}
     for path in (root_env, tests_env):
         if path.exists():
-            values.update(
-                {k: v for k, v in dotenv_values(path).items() if v is not None}
-            )
+            values.update({k: v for k, v in dotenv_values(path).items() if v is not None})
 
     for required in ("TELETHON_API_ID", "TELETHON_API_HASH", "TELETHON_SESSION"):
         if not values.get(required):
@@ -72,13 +70,22 @@ def _start_container(env: dict[str, str]) -> str:
     _stop_container()
     port = _free_port()
     cmd = [
-        "docker", "run", "-d", "--rm",
-        "--name", CONTAINER,
-        "-p", f"{port}:8080",
-        "-e", f"TELETHON_API_ID={env['TELETHON_API_ID']}",
-        "-e", f"TELETHON_API_HASH={env['TELETHON_API_HASH']}",
-        "-e", f"TELETHON_SESSION={env['TELETHON_SESSION']}",
-        "-e", f"TELETHON_LOG_LEVEL={env.get('TELETHON_LOG_LEVEL', 'INFO')}",
+        "docker",
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        CONTAINER,
+        "-p",
+        f"{port}:8080",
+        "-e",
+        f"TELETHON_API_ID={env['TELETHON_API_ID']}",
+        "-e",
+        f"TELETHON_API_HASH={env['TELETHON_API_HASH']}",
+        "-e",
+        f"TELETHON_SESSION={env['TELETHON_SESSION']}",
+        "-e",
+        f"TELETHON_LOG_LEVEL={env.get('TELETHON_LOG_LEVEL', 'INFO')}",
         IMAGE,
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
@@ -100,7 +107,9 @@ def _wait_ready(base_url: str, timeout: float = 60.0) -> None:
 
     logs = subprocess.run(
         ["docker", "logs", CONTAINER],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     raise RuntimeError(
         f"container never became ready: {last_err}\n"

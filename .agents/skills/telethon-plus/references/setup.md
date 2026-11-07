@@ -103,7 +103,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 | `TELETHON_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `TELETHON_LOG_JSON` | `false` | JSON-structured logs |
 | `TELETHON_REQUEST_TIMEOUT` | `60` | Per-request timeout (seconds) |
-| `TELETHON_FLOOD_SLEEP_THRESHOLD` | `60` | Auto-sleep through `FLOOD_WAIT` errors shorter than this many seconds |
+| `TELETHON_FLOOD_SLEEP_THRESHOLD` | `60` | Auto-sleep through `FLOOD_WAIT` errors up to this many seconds; a longer one answers 429 |
 | `TELETHON_DEVICE_MODEL` | `docker-telethon-plus` | Device string Telegram sees |
 | `TELETHON_SYSTEM_VERSION` | `1.0` | OS string |
 | `TELETHON_APP_VERSION` | `1.0` | App version string |
@@ -127,7 +127,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 | `TELETHON_THROTTLE_JITTER_MS` | `200` | Random ±jitter on top (breaks metronome patterns) |
 | `TELETHON_THROTTLE_PER_CHAT_INTERVAL_MS` | `1100` | Min gap between sends to the same chat |
 | `TELETHON_THROTTLE_PER_CHAT_READ_INTERVAL_MS` | `250` | Min gap between reads from the same chat |
-| `TELETHON_THROTTLE_ADAPTIVE` | `true` | On each `FLOOD_WAIT`, ×2 all waits for an hour; resets after a quiet hour |
+| `TELETHON_THROTTLE_ADAPTIVE` | `true` | Each `FLOOD_WAIT` in the last hour doubles the global and per-chat gaps (up to 64x); each one stops counting an hour after it happened |
 | `TELETHON_BUCKET_RESOLVE_PER_MIN` | `5` | Cap on `resolveUsername` — the main thing that gets accounts banned |
 | `TELETHON_BUCKET_GET_FULL_PER_MIN` | `10` | Cap on `getFullChannel` / `getFullUser` / `get_participants` |
 | `TELETHON_BUCKET_JOIN_PER_HOUR` | `5` | Cap on channel/group joins |

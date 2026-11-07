@@ -4,7 +4,8 @@ name = "telethon-plus"
 # is the git tag. uv requires the field; nothing is built from it.
 version = "0.0.0"
 description = "Telethon (MTProto userbot) behind a JSON HTTP API and an MCP endpoint, with throttling, an entity cache and live updates."
-license = { text = "WTFPL" }
+# GPL-2.0-or-later because hachoir, imported by Telethon, is GPL v2 only.
+license = "GPL-2.0-or-later"
 requires-python = ">=3.14,<3.15"
 authors = [{ name = "psyb0t" }]
 keywords = ["telegram", "telethon", "mtproto", "userbot", "fastapi", "mcp", "model-context-protocol"]
@@ -30,6 +31,9 @@ dependencies = [
     # Telethon connects through TELETHON_PROXY only when python-socks is
     # installed.
     "python-socks[asyncio]==3.2.0",
+    # Telethon reads video and audio duration and dimensions with hachoir;
+    # without it a video goes out as 0:00 at 1x1.
+    "hachoir==3.4.0",
 ]
 
 [project.urls]

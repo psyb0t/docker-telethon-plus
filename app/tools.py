@@ -13,18 +13,21 @@ resolveUsername calls.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional
-
 import base64
+import contextlib
 import datetime as _dt
 import io
+import mimetypes
+import os
+import re
+import tempfile
+from dataclasses import dataclass
+from typing import Annotated, Any, Awaitable, Callable, Dict, List, Optional
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from telethon import utils as tl_utils
 from telethon.tl.custom.message import Message
 from telethon.tl.functions.channels import (
     CreateChannelRequest,
@@ -36,23 +39,76 @@ from telethon.tl.functions.channels import (
     LeaveChannelRequest,
 )
 from telethon.tl.functions.messages import (
-    GetMessagesReactionsRequest,
+    DeleteChatUserRequest,
     ImportChatInviteRequest,
     SendReactionRequest,
     SendVoteRequest,
     UpdatePinnedMessageRequest,
 )
 from telethon.tl.types import (
+    Channel,
+    Chat,
     ChatAdminRights,
     ChatBannedRights,
+    DocumentAttributeFilename,
     InputMediaPoll,
+    InputPollAnswer,
+    InputUserSelf,
     Poll,
-    PollAnswer,
     ReactionEmoji,
+    TextWithEntities,
     User,
 )
 
 from app.client import TelethonHolder
+
+# Limits Telegram enforces server side. Declaring them on the params models
+# turns an oversized value into a validation error instead of an RPC failure.
+_MAX_CHANNEL_TITLE_LENGTH = 128
+_MAX_POLL_QUESTION_LENGTH = 255
+_MAX_POLL_OPTION_LENGTH = 100
+
+# A poll that does not exist yet has no server-assigned id or hash.
+_NEW_POLL_ID = 0
+_NEW_POLL_HASH = 0
+
+# Telethon's participants iterator asks for 200 users per request
+# (_MAX_PARTICIPANTS_CHUNK_SIZE in telethon/client/chats.py).
+_PARTICIPANTS_PAGE = 200
+
+# Telethon cuts uploads and downloads into parts sized in KB by
+# telethon.utils.get_appropriated_part_size.
+_BYTES_PER_KB = 1024
+
+# send_file staging.
+_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+_DOWNLOAD_CHUNK_BYTES = 1 << 16
+_STAGED_FILE_PREFIX = "upload-"
+_HTTP_SCHEMES = ("http", "https")
+# Real extensions are short; the cap limits what a URL can add to the name of
+# the staged file.
+_MAX_EXTENSION_LENGTH = 10
+_EXTENSION_PATTERN = re.compile(rf"\.[A-Za-z0-9]{{1,{_MAX_EXTENSION_LENGTH}}}")
+# Filesystems typically limit a file name to 255, so real file names fit; the
+# cap keeps a URL from supplying a huge one.
+_MAX_FILE_NAME_LENGTH = 255
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_PATH_SEPARATORS = re.compile(r"[/\\]")
+_NON_NAMES = ("", ".", "..")
+
+# PromoteUserParams fields that map one to one onto ChatAdminRights flags.
+_ADMIN_RIGHT_NAMES = (
+    "change_info",
+    "post_messages",
+    "edit_messages",
+    "delete_messages",
+    "ban_users",
+    "invite_users",
+    "pin_messages",
+    "add_admins",
+    "anonymous",
+    "manage_call",
+)
 
 ParamsModel = type[BaseModel]
 # Each handler takes its own params model; Callable parameters are
@@ -101,9 +157,10 @@ def _message_to_dict(msg: Message) -> Dict[str, Any]:
     fwd: Optional[Dict[str, Any]] = None
     fwd_from = getattr(msg, "fwd_from", None)
     if fwd_from is not None:
+        origin = getattr(fwd_from, "from_id", None)
         fwd = {
             "date": fwd_from.date.isoformat() if getattr(fwd_from, "date", None) else None,
-            "from_id": str(getattr(fwd_from, "from_id", "")) or None,
+            "from_id": tl_utils.get_peer_id(origin) if origin is not None else None,
             "from_name": getattr(fwd_from, "from_name", None),
             "channel_post": getattr(fwd_from, "channel_post", None),
             "post_author": getattr(fwd_from, "post_author", None),
@@ -117,7 +174,9 @@ def _message_to_dict(msg: Message) -> Dict[str, Any]:
         "sender_id": msg.sender_id,
         "text": msg.message or "",
         "out": msg.out,
-        "reply_to_msg_id": msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+        # The property returns None for a reply to a story, whose header has
+        # no message id.
+        "reply_to_msg_id": msg.reply_to_msg_id,
         "media": msg.media is not None,
         "media_type": type(msg.media).__name__ if msg.media else None,
         "fwd_from": fwd,
@@ -132,6 +191,38 @@ def _chat_key(chat: str) -> str:
     if s.startswith("@"):
         s = s[1:]
     return s
+
+
+def _require_user(entity: Any, action: str) -> None:
+    """Raise ValueError unless entity is a user.
+
+    EditAdminRequest takes an InputUser, so a channel or group passed as the
+    user made Telethon raise TypeError, which surfaced as a 500.
+    """
+    if isinstance(entity, User):
+        return
+    raise ValueError(f"{action} needs a user, but this is a {type(entity).__name__}")
+
+
+def _require_channel(entity: Any, action: str) -> None:
+    """Raise ValueError unless entity is a channel or supergroup.
+
+    Requests that take an InputChannel make Telethon raise TypeError for a
+    basic group or a user, which the server would report as a 500 instead of
+    a 400 the caller can act on.
+    """
+    if isinstance(entity, Channel):
+        return
+    raise ValueError(
+        f"{action} requires a channel or supergroup, but this chat is a " f"{type(entity).__name__}"
+    )
+
+
+def _transfer_parts(size: int) -> int:
+    """Requests Telethon needs to move size bytes: it cuts uploads and
+    downloads into parts of get_appropriated_part_size(size) KB."""
+    part_bytes = tl_utils.get_appropriated_part_size(size) * _BYTES_PER_KB
+    return (size + part_bytes - 1) // part_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -166,14 +257,10 @@ _register(
 
 class GetEntityParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    chat: str = Field(
-        ..., description="Username, phone, t.me link, or numeric ID as string."
-    )
+    chat: str = Field(..., description="Username, phone, t.me link, or numeric ID as string.")
 
 
-async def _get_entity(
-    holder: TelethonHolder, params: GetEntityParams
-) -> Dict[str, Any]:
+async def _get_entity(holder: TelethonHolder, params: GetEntityParams) -> Dict[str, Any]:
     entity = await holder.resolve_entity(params.chat)
     return _entity_to_dict(entity)
 
@@ -200,23 +287,18 @@ class SendMessageParams(BaseModel):
     parse_mode: Optional[str] = Field(
         None, description="One of: md, markdown, html, or null for plain text."
     )
-    reply_to: Optional[int] = Field(
-        None, description="Message ID to reply to."
-    )
+    reply_to: Optional[int] = Field(None, description="Message ID to reply to.")
     silent: bool = Field(False, description="Send without notification.")
     link_preview: bool = Field(True, description="Allow link previews.")
     schedule: Optional[_dt.datetime] = Field(
         None,
         description=(
-            "Optional UTC datetime to schedule the send. ISO 8601 string; "
-            "must be in the future."
+            "Optional UTC datetime to schedule the send. ISO 8601 string; " "must be in the future."
         ),
     )
 
 
-async def _send_message(
-    holder: TelethonHolder, params: SendMessageParams
-) -> Dict[str, Any]:
+async def _send_message(holder: TelethonHolder, params: SendMessageParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
@@ -257,9 +339,7 @@ class GetMessagesParams(BaseModel):
     search: Optional[str] = None
 
 
-async def _get_messages(
-    holder: TelethonHolder, params: GetMessagesParams
-) -> List[Dict[str, Any]]:
+async def _get_messages(holder: TelethonHolder, params: GetMessagesParams) -> List[Dict[str, Any]]:
     """Manual pagination: each underlying server hit (≤100 msgs) consumes one
     read-bucket slot and respects the per-chat read interval. Avoids the
     bucket under-counting that bare `iter_messages` would cause."""
@@ -321,9 +401,7 @@ class GetDialogsParams(BaseModel):
     )
 
 
-async def _get_dialogs(
-    holder: TelethonHolder, params: GetDialogsParams
-) -> List[Dict[str, Any]]:
+async def _get_dialogs(holder: TelethonHolder, params: GetDialogsParams) -> List[Dict[str, Any]]:
     DIALOGS_PAGE = 100  # Telegram's messages.getDialogs page size
 
     # Search mode: iterate dialogs and filter locally — stop when we have
@@ -355,9 +433,7 @@ async def _get_dialogs(
         return matches
 
     async with holder.guard("read") as client:
-        dialogs = await client.get_dialogs(
-            limit=params.limit, archived=params.archived
-        )
+        dialogs = await client.get_dialogs(limit=params.limit, archived=params.archived)
     # iter_dialogs paginated internally; charge extra slots for hidden hits.
     extra_pages = max(0, (len(dialogs) - 1) // DIALOGS_PAGE)
     holder.throttle.record_extra("read", extra_pages)
@@ -444,9 +520,7 @@ class DeleteMessagesParams(BaseModel):
     revoke: bool = Field(True, description="Delete for everyone, not just you.")
 
 
-async def _delete_messages(
-    holder: TelethonHolder, params: DeleteMessagesParams
-) -> Dict[str, Any]:
+async def _delete_messages(holder: TelethonHolder, params: DeleteMessagesParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
@@ -485,9 +559,7 @@ class EditMessageParams(BaseModel):
     link_preview: bool = True
 
 
-async def _edit_message(
-    holder: TelethonHolder, params: EditMessageParams
-) -> Dict[str, Any]:
+async def _edit_message(holder: TelethonHolder, params: EditMessageParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
@@ -524,9 +596,7 @@ class MarkReadParams(BaseModel):
     max_id: int = Field(0, ge=0, description="Mark up to this message ID. 0 = all.")
 
 
-async def _mark_read(
-    holder: TelethonHolder, params: MarkReadParams
-) -> Dict[str, Any]:
+async def _mark_read(holder: TelethonHolder, params: MarkReadParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
@@ -572,9 +642,54 @@ class SendFileParams(BaseModel):
     max_bytes: int = Field(50 * 1024 * 1024, ge=1, le=2 * 1024 * 1024 * 1024)
 
 
-async def _send_file(
-    holder: TelethonHolder, params: SendFileParams
-) -> Dict[str, Any]:
+def _file_name_from_url(url: str) -> Optional[str]:
+    """Last path segment of url, cleaned for use as a file name shown to the
+    recipient, or None when the path carries no usable name."""
+    path = unquote(urlsplit(url).path)
+    segment = _PATH_SEPARATORS.split(path)[-1]
+    name = _CONTROL_CHARACTERS.sub("", segment).strip()
+    if name in _NON_NAMES:
+        return None
+    return name[:_MAX_FILE_NAME_LENGTH]
+
+
+def _staging_suffix(file_name: Optional[str], content_type: str) -> str:
+    """Extension for the staged file. Telethon tells photos from documents and
+    picks the MIME type from it, so it comes from the URL's file name and,
+    failing that, from the response Content-Type."""
+    if file_name:
+        extension = os.path.splitext(file_name)[1]
+        if _EXTENSION_PATTERN.fullmatch(extension):
+            return extension
+    mime_type = content_type.split(";", 1)[0].strip().lower()
+    return mimetypes.guess_extension(mime_type) or ""
+
+
+def _check_download_response(resp: httpx.Response, max_bytes: int) -> None:
+    resp.raise_for_status()
+    # Redirects are followed, so the final URL is what was fetched.
+    if resp.url.scheme not in _HTTP_SCHEMES:
+        raise ValueError(f"file_url redirected to a non-http(s) URL ({resp.url.scheme})")
+    length = int(resp.headers.get("content-length") or 0)
+    if length and length > max_bytes:
+        raise ValueError(f"file too large: {length} > {max_bytes}")
+
+
+async def _write_body(resp: httpx.Response, fd: int, max_bytes: int) -> int:
+    """Stream the response body into the open descriptor fd, which is closed
+    here, and return the byte count. Raises ValueError once the body outgrows
+    max_bytes, since a streamed body may carry no Content-Length."""
+    written = 0
+    with os.fdopen(fd, "wb") as fh:
+        async for chunk in resp.aiter_bytes(_DOWNLOAD_CHUNK_BYTES):
+            written += len(chunk)
+            if written > max_bytes:
+                raise ValueError(f"file too large: exceeded {max_bytes}")
+            fh.write(chunk)
+    return written
+
+
+async def _send_file(holder: TelethonHolder, params: SendFileParams) -> Dict[str, Any]:
     holder.assert_writeable()
     if not params.file_url.startswith(("http://", "https://")):
         raise ValueError("file_url must be http(s)")
@@ -583,41 +698,51 @@ async def _send_file(
     if holder.dry_run:
         return {"dry_run": True, "would_send_file": params.model_dump(mode="json")}
 
+    file_name = _file_name_from_url(params.file_url)
+    attributes = [DocumentAttributeFilename(file_name=file_name)] if file_name else None
+
     # TELETHON_DOWNLOAD_DIR; mkstemp gives the file an unguessable name that
-    # only this process can open. One finally removes it whether the
-    # download or the send fails.
+    # only this process can open. It is created once the response headers are
+    # in, because the Content-Type may supply the extension. One finally
+    # removes it whether the download or the send fails.
     os.makedirs(holder.cfg.download_dir, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="upload-", dir=holder.cfg.download_dir)
+    staged_path: Optional[str] = None
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-            async with http.stream("GET", params.file_url) as resp:
-                resp.raise_for_status()
-                length = int(resp.headers.get("content-length") or 0)
-                if length and length > params.max_bytes:
-                    raise ValueError(f"file too large: {length} > {params.max_bytes}")
-                written = 0
-                with os.fdopen(fd, "wb") as fh:
-                    fd = -1
-                    async for chunk in resp.aiter_bytes(1 << 16):
-                        written += len(chunk)
-                        if written > params.max_bytes:
-                            raise ValueError(f"file too large: exceeded {params.max_bytes}")
-                        fh.write(chunk)
+        try:
+            async with httpx.AsyncClient(
+                timeout=_DOWNLOAD_TIMEOUT_SECONDS, follow_redirects=True
+            ) as http:
+                async with http.stream("GET", params.file_url) as resp:
+                    _check_download_response(resp, params.max_bytes)
+                    fd, staged_path = tempfile.mkstemp(
+                        prefix=_STAGED_FILE_PREFIX,
+                        suffix=_staging_suffix(file_name, resp.headers.get("content-type", "")),
+                        dir=holder.cfg.download_dir,
+                    )
+                    written = await _write_body(resp, fd, params.max_bytes)
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise ValueError(f"file_url fetch failed: {exc}") from exc
+        if written == 0:
+            # Telegram refuses an empty file; say so before spending a send.
+            raise ValueError("file_url returned an empty file")
 
         async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
             msg = await client.send_file(
                 entity=entity,
-                file=tmp_path,
+                file=staged_path,
                 caption=params.text,
                 parse_mode=params.parse_mode,
                 silent=params.silent,
                 force_document=params.force_document,
+                attributes=attributes,
             )
+        # The guard paid for one request, but the upload sent one request per
+        # part plus the SendMediaRequest that posts the file.
+        holder.throttle.record_extra("send", _transfer_parts(written))
     finally:
-        if fd != -1:
-            os.close(fd)
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp_path)
+        if staged_path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(staged_path)
 
     return _message_to_dict(msg)
 
@@ -648,11 +773,29 @@ class GetParticipantsParams(BaseModel):
     search: Optional[str] = None
 
 
+def _participant_requests(entity: Any, returned: int, limit: int, search: str) -> int:
+    """Requests Telethon sent for one get_participants call, mirroring
+    _ParticipantsIter in telethon/client/chats.py. Assumes full pages: it
+    cannot see participants Telethon dropped, such as members who left."""
+    if not isinstance(entity, Channel):
+        # A basic group is one GetFullChat and a user one GetUsers.
+        return 1
+    pages = (returned + _PARTICIPANTS_PAGE - 1) // _PARTICIPANTS_PAGE
+    if returned < limit:
+        # Telethon only knows the list ended when a further page comes back
+        # empty. A list that fills the limit is never asked for another page.
+        pages += 1
+    if search:
+        # A search can narrow the list, so Telethon first asks for the total.
+        pages += 1
+    return pages
+
+
 async def _get_participants(
     holder: TelethonHolder, params: GetParticipantsParams
 ) -> List[Dict[str, Any]]:
-    PARTICIPANTS_PAGE = 200  # channels.getParticipants page size
     entity = await holder.resolve_entity(params.chat)
+    search = params.search or ""
     # get_participants pulls FullChannel-ish data; classify under get_full.
     async with holder.guard(
         "get_full", chat_key=_chat_key(params.chat), chat_kind="read"
@@ -660,10 +803,10 @@ async def _get_participants(
         participants = await client.get_participants(
             entity,
             limit=params.limit,
-            search=params.search or "",
+            search=search,
         )
-    extra_pages = max(0, (len(participants) - 1) // PARTICIPANTS_PAGE)
-    holder.throttle.record_extra("get_full", extra_pages)
+    requests = _participant_requests(entity, len(participants), params.limit, search)
+    holder.throttle.record_extra("get_full", max(0, requests - 1))
     return [_entity_to_dict(p) for p in participants]
 
 
@@ -684,13 +827,11 @@ _register(
 
 class CreateGroupParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    title: str = Field(..., min_length=1, max_length=255)
+    title: str = Field(..., min_length=1, max_length=_MAX_CHANNEL_TITLE_LENGTH)
     megagroup: bool = Field(True, description="True = supergroup, False = broadcast channel.")
 
 
-async def _create_group(
-    holder: TelethonHolder, params: CreateGroupParams
-) -> Dict[str, Any]:
+async def _create_group(holder: TelethonHolder, params: CreateGroupParams) -> Dict[str, Any]:
     holder.assert_writeable()
     if holder.dry_run:
         return {"dry_run": True, "would_create": params.model_dump(mode="json")}
@@ -699,6 +840,8 @@ async def _create_group(
             CreateChannelRequest(
                 title=params.title,
                 about="",
+                # Telegram needs exactly one of the two flags.
+                broadcast=not params.megagroup,
                 megagroup=params.megagroup,
             )
         )
@@ -725,11 +868,10 @@ class DeleteChatParams(BaseModel):
     chat: str
 
 
-async def _delete_chat(
-    holder: TelethonHolder, params: DeleteChatParams
-) -> Dict[str, Any]:
+async def _delete_chat(holder: TelethonHolder, params: DeleteChatParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
+    _require_channel(entity, "delete_chat")
     if holder.dry_run:
         return {"dry_run": True, "would_delete_chat": params.chat}
     async with holder.guard("other") as client:
@@ -758,11 +900,10 @@ class JoinChatParams(BaseModel):
     chat: str
 
 
-async def _join_chat(
-    holder: TelethonHolder, params: JoinChatParams
-) -> Dict[str, Any]:
+async def _join_chat(holder: TelethonHolder, params: JoinChatParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
+    _require_channel(entity, "join_chat")
     if holder.dry_run:
         return {"dry_run": True, "would_join": params.chat}
     async with holder.guard("join") as client:
@@ -790,22 +931,30 @@ class LeaveChatParams(BaseModel):
     chat: str
 
 
-async def _leave_chat(
-    holder: TelethonHolder, params: LeaveChatParams
-) -> Dict[str, Any]:
+async def _leave_chat(holder: TelethonHolder, params: LeaveChatParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
+    is_basic_group = isinstance(entity, Chat)
+    if not is_basic_group:
+        _require_channel(entity, "leave_chat")
     if holder.dry_run:
         return {"dry_run": True, "would_leave": params.chat}
+    # A basic group is left by removing yourself; LeaveChannelRequest only
+    # takes a channel.
+    request = (
+        DeleteChatUserRequest(chat_id=entity.id, user_id=InputUserSelf())
+        if is_basic_group
+        else LeaveChannelRequest(channel=entity)
+    )
     async with holder.guard("other") as client:
-        await client(LeaveChannelRequest(channel=entity))
+        await client(request)
     return {"ok": True}
 
 
 _register(
     Tool(
         name="leave_chat",
-        description="Leave a channel or supergroup.",
+        description="Leave a channel, supergroup or basic group.",
         params_model=LeaveChatParams,
         handler=_leave_chat,
     )
@@ -822,9 +971,7 @@ class BulkResolveParams(BaseModel):
     chats: List[str] = Field(..., min_length=1, max_length=500)
 
 
-async def _bulk_resolve(
-    holder: TelethonHolder, params: BulkResolveParams
-) -> Dict[str, Any]:
+async def _bulk_resolve(holder: TelethonHolder, params: BulkResolveParams) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
     for chat in params.chats:
@@ -861,9 +1008,7 @@ class GetMessageParams(BaseModel):
     message_id: int = Field(..., ge=1)
 
 
-async def _get_message(
-    holder: TelethonHolder, params: GetMessageParams
-) -> Dict[str, Any]:
+async def _get_message(holder: TelethonHolder, params: GetMessageParams) -> Dict[str, Any]:
     entity = await holder.resolve_entity(params.chat)
     async with holder.guard("read", chat_key=_chat_key(params.chat), chat_kind="read") as client:
         msgs = await client.get_messages(entity, ids=[params.message_id])
@@ -924,13 +1069,24 @@ async def download_media_bytes(
         msg = msgs[0]
         if msg.media is None:
             raise ValueError("message has no media attachment")
-        file_info = getattr(msg, "file", None)
-        mime_type = getattr(file_info, "mime_type", None) if file_info else None
-        filename = getattr(file_info, "name", None) if file_info else None
+        # Only photos and documents have a file; a location, poll or dice
+        # roll has nothing to download.
+        file_info = msg.file
+        if file_info is None:
+            raise ValueError(f"{type(msg.media).__name__} media has no downloadable file")
+        # Refuse before the transfer when Telegram already reports the size.
+        if file_info.size is not None and file_info.size > max_bytes:
+            raise ValueError(f"media too large: {file_info.size} > max_bytes={max_bytes}")
+        mime_type = file_info.mime_type
+        filename = file_info.name
     async with holder.guard("read", chat_key=chat_key, chat_kind="read") as client:
         buf = io.BytesIO()
         await client.download_media(msg, file=buf)
         data = buf.getvalue()
+    # The guard paid for one request, but the download sent one per part.
+    holder.throttle.record_extra("read", max(0, _transfer_parts(len(data)) - 1))
+    if not data:
+        raise ValueError("download returned no data")
     if len(data) > max_bytes:
         raise ValueError(f"media too large: {len(data)} > max_bytes={max_bytes}")
     if not filename:
@@ -944,12 +1100,8 @@ async def download_media_bytes(
     }
 
 
-async def _download_media(
-    holder: TelethonHolder, params: DownloadMediaParams
-) -> Dict[str, Any]:
-    info = await download_media_bytes(
-        holder, params.chat, params.message_id, params.max_bytes
-    )
+async def _download_media(holder: TelethonHolder, params: DownloadMediaParams) -> Dict[str, Any]:
+    info = await download_media_bytes(holder, params.chat, params.message_id, params.max_bytes)
     return {
         "size": info["size"],
         "media_type": info["media_type"],
@@ -985,20 +1137,20 @@ class SetReactionParams(BaseModel):
     big: bool = Field(False, description="Animate as 'big' reaction.")
 
 
-async def _set_reaction(
-    holder: TelethonHolder, params: SetReactionParams
-) -> Dict[str, Any]:
+async def _set_reaction(holder: TelethonHolder, params: SetReactionParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_react": params.model_dump(mode="json")}
     async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
-        await client(SendReactionRequest(
-            peer=entity,
-            msg_id=params.message_id,
-            reaction=[ReactionEmoji(emoticon=params.emoji)],
-            big=params.big,
-        ))
+        await client(
+            SendReactionRequest(
+                peer=entity,
+                msg_id=params.message_id,
+                reaction=[ReactionEmoji(emoticon=params.emoji)],
+                big=params.big,
+            )
+        )
     return {"ok": True}
 
 
@@ -1018,19 +1170,19 @@ class RemoveReactionParams(BaseModel):
     message_id: int = Field(..., ge=1)
 
 
-async def _remove_reaction(
-    holder: TelethonHolder, params: RemoveReactionParams
-) -> Dict[str, Any]:
+async def _remove_reaction(holder: TelethonHolder, params: RemoveReactionParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_unreact": params.model_dump(mode="json")}
     async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
-        await client(SendReactionRequest(
-            peer=entity,
-            msg_id=params.message_id,
-            reaction=[],
-        ))
+        await client(
+            SendReactionRequest(
+                peer=entity,
+                msg_id=params.message_id,
+                reaction=[],
+            )
+        )
     return {"ok": True}
 
 
@@ -1057,20 +1209,20 @@ class PinMessageParams(BaseModel):
     pm_oneside: bool = Field(False, description="In DMs, pin only for yourself.")
 
 
-async def _pin_message(
-    holder: TelethonHolder, params: PinMessageParams
-) -> Dict[str, Any]:
+async def _pin_message(holder: TelethonHolder, params: PinMessageParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_pin": params.model_dump(mode="json")}
     async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
-        await client(UpdatePinnedMessageRequest(
-            peer=entity,
-            id=params.message_id,
-            silent=params.silent,
-            pm_oneside=params.pm_oneside,
-        ))
+        await client(
+            UpdatePinnedMessageRequest(
+                peer=entity,
+                id=params.message_id,
+                silent=params.silent,
+                pm_oneside=params.pm_oneside,
+            )
+        )
     return {"ok": True}
 
 
@@ -1090,19 +1242,19 @@ class UnpinMessageParams(BaseModel):
     message_id: int = Field(..., ge=1)
 
 
-async def _unpin_message(
-    holder: TelethonHolder, params: UnpinMessageParams
-) -> Dict[str, Any]:
+async def _unpin_message(holder: TelethonHolder, params: UnpinMessageParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_unpin": params.model_dump(mode="json")}
     async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
-        await client(UpdatePinnedMessageRequest(
-            peer=entity,
-            id=params.message_id,
-            unpin=True,
-        ))
+        await client(
+            UpdatePinnedMessageRequest(
+                peer=entity,
+                id=params.message_id,
+                unpin=True,
+            )
+        )
     return {"ok": True}
 
 
@@ -1126,19 +1278,16 @@ class GetLinkedChatParams(BaseModel):
     chat: str
 
 
-async def _get_linked_chat(
-    holder: TelethonHolder, params: GetLinkedChatParams
-) -> Dict[str, Any]:
+async def _get_linked_chat(holder: TelethonHolder, params: GetLinkedChatParams) -> Dict[str, Any]:
     entity = await holder.resolve_entity(params.chat)
+    _require_channel(entity, "get_linked_chat")
     async with holder.guard("get_full") as client:
         full = await client(GetFullChannelRequest(channel=entity))
     linked_id = getattr(full.full_chat, "linked_chat_id", None)
     if not linked_id:
         return {"linked_chat_id": None, "linked_entity": None}
     # Find the linked entity in the response's chats list.
-    linked_entity = next(
-        (c for c in full.chats if getattr(c, "id", None) == linked_id), None
-    )
+    linked_entity = next((c for c in full.chats if getattr(c, "id", None) == linked_id), None)
     return {
         "linked_chat_id": linked_id,
         "linked_entity": _entity_to_dict(linked_entity) if linked_entity else None,
@@ -1167,9 +1316,7 @@ class JoinViaInviteParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invite: str = Field(
         ...,
-        description=(
-            "Private invite hash (the part after t.me/+) or the full link."
-        ),
+        description=("Private invite hash (the part after t.me/+) or the full link."),
     )
 
 
@@ -1177,16 +1324,14 @@ def _extract_invite_hash(raw: str) -> str:
     s = raw.strip()
     for prefix in ("https://t.me/+", "http://t.me/+", "t.me/+", "@joinchat/", "+"):
         if s.startswith(prefix):
-            s = s[len(prefix):]
+            s = s[len(prefix) :]
             break
     if "joinchat/" in s:
         s = s.split("joinchat/", 1)[1]
     return s.strip("/")
 
 
-async def _join_via_invite(
-    holder: TelethonHolder, params: JoinViaInviteParams
-) -> Dict[str, Any]:
+async def _join_via_invite(holder: TelethonHolder, params: JoinViaInviteParams) -> Dict[str, Any]:
     holder.assert_writeable()
     invite_hash = _extract_invite_hash(params.invite)
     if not invite_hash:
@@ -1224,22 +1369,30 @@ class BanUserParams(BaseModel):
     until_seconds: int = Field(
         0,
         ge=0,
-        description="Ban duration from now in seconds. 0 = permanent.",
+        description=(
+            "Ban duration from now in seconds. 0 = permanent; Telegram also treats "
+            "under 30 seconds or over 366 days as permanent."
+        ),
     )
 
 
-async def _ban_user(
-    holder: TelethonHolder, params: BanUserParams
-) -> Dict[str, Any]:
+async def _ban_user(holder: TelethonHolder, params: BanUserParams) -> Dict[str, Any]:
     holder.assert_writeable()
     chat = await holder.resolve_entity(params.chat)
+    _require_channel(chat, "ban_user")
     user = await holder.resolve_entity(params.user)
     if holder.dry_run:
         return {"dry_run": True, "would_ban": params.model_dump(mode="json")}
-    rights = ChatBannedRights(
-        until_date=params.until_seconds or 0,
-        view_messages=True,
+    # until_date is an absolute time. Passing the seconds themselves sent a
+    # 1970 timestamp, which Telegram reads as "forever", so every timed ban
+    # was permanent. Telegram also treats an end under 30 seconds or over
+    # 366 days away as forever.
+    until = (
+        _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=params.until_seconds)
+        if params.until_seconds
+        else None
     )
+    rights = ChatBannedRights(until_date=until, view_messages=True)
     async with holder.guard("other") as client:
         await client(EditBannedRequest(channel=chat, participant=user, banned_rights=rights))
     return {"ok": True}
@@ -1261,11 +1414,10 @@ class UnbanUserParams(BaseModel):
     user: str
 
 
-async def _unban_user(
-    holder: TelethonHolder, params: UnbanUserParams
-) -> Dict[str, Any]:
+async def _unban_user(holder: TelethonHolder, params: UnbanUserParams) -> Dict[str, Any]:
     holder.assert_writeable()
     chat = await holder.resolve_entity(params.chat)
+    _require_channel(chat, "unban_user")
     user = await holder.resolve_entity(params.user)
     if holder.dry_run:
         return {"dry_run": True, "would_unban": params.model_dump(mode="json")}
@@ -1291,33 +1443,41 @@ class KickUserParams(BaseModel):
     user: str
 
 
-async def _kick_user(
-    holder: TelethonHolder, params: KickUserParams
-) -> Dict[str, Any]:
+async def _kick_user(holder: TelethonHolder, params: KickUserParams) -> Dict[str, Any]:
     """Ban-then-unban = kick without permanent ban."""
     holder.assert_writeable()
     chat = await holder.resolve_entity(params.chat)
+    _require_channel(chat, "kick_user")
     user = await holder.resolve_entity(params.user)
     if holder.dry_run:
         return {"dry_run": True, "would_kick": params.model_dump(mode="json")}
+    # One guard per request so each one is charged to the bucket.
     async with holder.guard("other") as client:
-        await client(EditBannedRequest(
-            channel=chat,
-            participant=user,
-            banned_rights=ChatBannedRights(until_date=0, view_messages=True),
-        ))
-        await client(EditBannedRequest(
-            channel=chat,
-            participant=user,
-            banned_rights=ChatBannedRights(until_date=0),
-        ))
+        await client(
+            EditBannedRequest(
+                channel=chat,
+                participant=user,
+                banned_rights=ChatBannedRights(until_date=0, view_messages=True),
+            )
+        )
+    async with holder.guard("other") as client:
+        await client(
+            EditBannedRequest(
+                channel=chat,
+                participant=user,
+                banned_rights=ChatBannedRights(until_date=0),
+            )
+        )
     return {"ok": True}
 
 
 _register(
     Tool(
         name="kick_user",
-        description="Kick a user from a chat (ban + immediate unban — they can rejoin via invite).",
+        description=(
+            "Kick a user from a chat (ban, then unban at once, so they can rejoin "
+            "through an invite)."
+        ),
         params_model=KickUserParams,
         handler=_kick_user,
     )
@@ -1341,33 +1501,31 @@ class PromoteUserParams(BaseModel):
     manage_call: bool = False
 
 
-async def _promote_user(
-    holder: TelethonHolder, params: PromoteUserParams
-) -> Dict[str, Any]:
+async def _promote_user(holder: TelethonHolder, params: PromoteUserParams) -> Dict[str, Any]:
     holder.assert_writeable()
+    granted = {name: True for name in _ADMIN_RIGHT_NAMES if getattr(params, name)}
+    if not granted:
+        # Telegram reads an empty set of admin rights as "remove the admin".
+        raise ValueError(
+            "promote_user needs at least one right set to true; "
+            "use demote_user to remove admin rights"
+        )
     chat = await holder.resolve_entity(params.chat)
+    _require_channel(chat, "promote_user")
     user = await holder.resolve_entity(params.user)
+    _require_user(user, "promote_user")
     if holder.dry_run:
         return {"dry_run": True, "would_promote": params.model_dump(mode="json")}
-    rights = ChatAdminRights(
-        change_info=params.change_info,
-        post_messages=params.post_messages,
-        edit_messages=params.edit_messages,
-        delete_messages=params.delete_messages,
-        ban_users=params.ban_users,
-        invite_users=params.invite_users,
-        pin_messages=params.pin_messages,
-        add_admins=params.add_admins,
-        anonymous=params.anonymous,
-        manage_call=params.manage_call,
-    )
+    rights = ChatAdminRights(**granted)
     async with holder.guard("other") as client:
-        await client(EditAdminRequest(
-            channel=chat,
-            user_id=user,
-            admin_rights=rights,
-            rank=params.title or "",
-        ))
+        await client(
+            EditAdminRequest(
+                channel=chat,
+                user_id=user,
+                admin_rights=rights,
+                rank=params.title or "",
+            )
+        )
     return {"ok": True}
 
 
@@ -1390,22 +1548,24 @@ class DemoteUserParams(BaseModel):
     user: str
 
 
-async def _demote_user(
-    holder: TelethonHolder, params: DemoteUserParams
-) -> Dict[str, Any]:
+async def _demote_user(holder: TelethonHolder, params: DemoteUserParams) -> Dict[str, Any]:
     holder.assert_writeable()
     chat = await holder.resolve_entity(params.chat)
+    _require_channel(chat, "demote_user")
     user = await holder.resolve_entity(params.user)
+    _require_user(user, "demote_user")
     if holder.dry_run:
         return {"dry_run": True, "would_demote": params.model_dump(mode="json")}
     rights = ChatAdminRights()  # all False = no admin powers
     async with holder.guard("other") as client:
-        await client(EditAdminRequest(
-            channel=chat,
-            user_id=user,
-            admin_rights=rights,
-            rank="",
-        ))
+        await client(
+            EditAdminRequest(
+                channel=chat,
+                user_id=user,
+                admin_rights=rights,
+                rank="",
+            )
+        )
     return {"ok": True}
 
 
@@ -1427,8 +1587,10 @@ _register(
 class CreatePollParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat: str
-    question: str = Field(..., min_length=1, max_length=255)
-    options: List[str] = Field(..., min_length=2, max_length=10)
+    question: str = Field(..., min_length=1, max_length=_MAX_POLL_QUESTION_LENGTH)
+    options: List[Annotated[str, Field(min_length=1, max_length=_MAX_POLL_OPTION_LENGTH)]] = Field(
+        ..., min_length=2, max_length=10
+    )
     multiple_choice: bool = False
     quiz: bool = False
     correct_option: Optional[int] = Field(
@@ -1439,31 +1601,40 @@ class CreatePollParams(BaseModel):
     )
 
 
-async def _create_poll(
-    holder: TelethonHolder, params: CreatePollParams
-) -> Dict[str, Any]:
+async def _create_poll(holder: TelethonHolder, params: CreatePollParams) -> Dict[str, Any]:
     holder.assert_writeable()
+    if params.quiz and params.correct_option is None:
+        raise ValueError("quiz polls require correct_option")
+    if params.quiz and params.multiple_choice:
+        # Telegram refuses a quiz that allows more than one answer.
+        raise ValueError("a quiz cannot be multiple_choice")
+    if not params.quiz and (params.correct_option is not None or params.solution):
+        raise ValueError("correct_option and solution apply only to quiz polls")
+    if params.correct_option is not None and params.correct_option >= len(params.options):
+        raise ValueError(
+            f"correct_option {params.correct_option} is out of range for "
+            f"{len(params.options)} options"
+        )
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_create_poll": params.model_dump(mode="json")}
-    if params.quiz and params.correct_option is None:
-        raise ValueError("quiz polls require correct_option")
-    answers = [
-        PollAnswer(text=opt, option=bytes([i])) for i, opt in enumerate(params.options)
-    ]
     poll = Poll(
-        id=0,
-        question=params.question,
-        answers=answers,
+        id=_NEW_POLL_ID,
+        hash=_NEW_POLL_HASH,
+        question=TextWithEntities(text=params.question, entities=[]),
+        answers=[
+            InputPollAnswer(text=TextWithEntities(text=option, entities=[]))
+            for option in params.options
+        ],
         multiple_choice=params.multiple_choice,
         quiz=params.quiz,
     )
     media = InputMediaPoll(
         poll=poll,
-        correct_answers=(
-            [bytes([params.correct_option])] if params.correct_option is not None else None
-        ),
+        correct_answers=([params.correct_option] if params.correct_option is not None else None),
         solution=params.solution,
+        # Telegram wants the entities whenever there is a solution.
+        solution_entities=[] if params.solution is not None else None,
     )
     async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
         msg = await client.send_file(entity=entity, file=media)
@@ -1474,8 +1645,7 @@ _register(
     Tool(
         name="create_poll",
         description=(
-            "Create a poll in a chat. Set quiz=true with correct_option for "
-            "quiz-style polls."
+            "Create a poll in a chat. Set quiz=true with correct_option for " "quiz-style polls."
         ),
         params_model=CreatePollParams,
         handler=_create_poll,
@@ -1490,20 +1660,33 @@ class VotePollParams(BaseModel):
     options: List[int] = Field(..., min_length=1, max_length=10, description="0-based indices.")
 
 
-async def _vote_poll(
-    holder: TelethonHolder, params: VotePollParams
-) -> Dict[str, Any]:
+async def _vote_poll(holder: TelethonHolder, params: VotePollParams) -> Dict[str, Any]:
     holder.assert_writeable()
     entity = await holder.resolve_entity(params.chat)
     if holder.dry_run:
         return {"dry_run": True, "would_vote": params.model_dump(mode="json")}
-    options_bytes = [bytes([i]) for i in params.options]
-    async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
-        await client(SendVoteRequest(
-            peer=entity,
-            msg_id=params.message_id,
-            options=options_bytes,
-        ))
+    # Telegram assigns each answer an opaque token; a vote must send those
+    # tokens, so the poll is fetched to turn the indices into them.
+    chat_key = _chat_key(params.chat)
+    async with holder.guard("read", chat_key=chat_key, chat_kind="read") as client:
+        msgs = await client.get_messages(entity, ids=[params.message_id])
+    if not msgs or msgs[0] is None or msgs[0].poll is None:
+        raise ValueError("message has no poll")
+    answers = msgs[0].poll.poll.answers
+    out_of_range = [i for i in params.options if not 0 <= i < len(answers)]
+    if out_of_range:
+        raise ValueError(
+            f"option index {out_of_range} is out of range for a poll with "
+            f"{len(answers)} options"
+        )
+    async with holder.guard("send", chat_key=chat_key) as client:
+        await client(
+            SendVoteRequest(
+                peer=entity,
+                msg_id=params.message_id,
+                options=[answers[i].option for i in params.options],
+            )
+        )
     return {"ok": True}
 
 
@@ -1523,35 +1706,28 @@ class GetPollResultsParams(BaseModel):
     message_id: int = Field(..., ge=1)
 
 
-async def _get_poll_results(
-    holder: TelethonHolder, params: GetPollResultsParams
-) -> Dict[str, Any]:
+async def _get_poll_results(holder: TelethonHolder, params: GetPollResultsParams) -> Dict[str, Any]:
     entity = await holder.resolve_entity(params.chat)
-    async with holder.guard("read") as client:
-        result = await client(GetMessagesReactionsRequest(
-            peer=entity,
-            id=[params.message_id],
-        ))
-    # The poll results are part of the message; fetch the message directly too.
     async with holder.guard("read") as client:
         msgs = await client.get_messages(entity, ids=[params.message_id])
     if not msgs or msgs[0] is None or msgs[0].poll is None:
         raise ValueError("message has no poll")
-    poll_msg = msgs[0]
-    results = getattr(poll_msg.poll, "results", None) or getattr(poll_msg, "results", None)
+    media = msgs[0].poll
+    # Results name an answer by its opaque token; report the index callers
+    # pass to vote_poll instead.
+    index_by_token = {answer.option: index for index, answer in enumerate(media.poll.answers)}
     return {
-        "question": getattr(poll_msg.poll.poll, "question", None),
-        "total_voters": getattr(results, "total_voters", None) if results else None,
+        "question": media.poll.question.text,
+        "total_voters": media.results.total_voters,
         "results": [
             {
-                "option_index": r.option[0] if r.option else None,
+                "option_index": index_by_token.get(r.option),
                 "voters": r.voters,
                 "correct": r.correct,
                 "chosen": r.chosen,
             }
-            for r in (getattr(results, "results", None) or [])
-        ] if results else [],
-        "_reactions_envelope_received": result is not None,
+            for r in media.results.results or []
+        ],
     }
 
 
@@ -1574,9 +1750,7 @@ class ThrottleStatusParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-async def _throttle_status(
-    holder: TelethonHolder, _: ThrottleStatusParams
-) -> Dict[str, Any]:
+async def _throttle_status(holder: TelethonHolder, _: ThrottleStatusParams) -> Dict[str, Any]:
     return {
         "throttle": holder.throttle.snapshot(),
         "cache": holder.cache.stats(),
@@ -1607,9 +1781,7 @@ class AccountHealthParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-async def _account_health(
-    holder: TelethonHolder, _: AccountHealthParams
-) -> Dict[str, Any]:
+async def _account_health(holder: TelethonHolder, _: AccountHealthParams) -> Dict[str, Any]:
     snap = holder.throttle.snapshot()
     risk = "ok"
     mult = float(snap.get("multiplier", 1.0))

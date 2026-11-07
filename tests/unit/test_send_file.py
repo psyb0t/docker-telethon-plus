@@ -78,7 +78,7 @@ async def test_a_failed_download_leaves_no_file(
     file_holder: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _serve(monkeypatch, httpx.Response(500))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ValueError, match="file_url fetch failed"):
         await _send(file_holder)
     assert _left(tmp_path) == []
     file_holder._client.send_file.assert_not_awaited()

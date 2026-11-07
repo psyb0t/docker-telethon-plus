@@ -37,11 +37,13 @@ def base_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 @pytest.fixture
 def cfg(base_env: None):
     from app.config import Config
+
     return Config.from_env()
 
 
-def _make_entity(eid: int, *, username: str | None = None, title: str | None = None,
-                 is_channel: bool = False) -> MagicMock:
+def _make_entity(
+    eid: int, *, username: str | None = None, title: str | None = None, is_channel: bool = False
+) -> MagicMock:
     """Construct a minimal stand-in for a Telethon entity."""
     e = MagicMock()
     e.id = eid

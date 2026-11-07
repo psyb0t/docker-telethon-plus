@@ -39,14 +39,17 @@ def test_an_empty_proxy_is_none() -> None:
                 "rdns": True,
             },
         ),
-        ("socks4://proxy.example.invalid:1080", {
-            "proxy_type": "socks4",
-            "addr": "proxy.example.invalid",
-            "port": 1080,
-            "username": None,
-            "password": None,
-            "rdns": True,
-        }),
+        (
+            "socks4://proxy.example.invalid:1080",
+            {
+                "proxy_type": "socks4",
+                "addr": "proxy.example.invalid",
+                "port": 1080,
+                "username": None,
+                "password": None,
+                "rdns": True,
+            },
+        ),
     ],
 )
 def test_a_proxy_url_is_parsed(raw: str, expected: dict[str, Any]) -> None:
