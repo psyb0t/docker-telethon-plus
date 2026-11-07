@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.1, 2026-11-07
+
+The first published release with the v0.7.0 changes below. v0.7.0 was tagged, but its CI run failed, so no `v0.7.0` image, GitHub release or registry entry exists.
+
+### Fixed
+
+- **A `/ws/updates` connection could end with a stray `CancelledError`.** When the server cancelled the route while it was cleaning up after a disconnect, the route raised the cancellation of its own helper task, which the server did not recognise as its own. The route now waits for its helpers without passing their cancellation on.
+
 ## v0.7.0, 2026-11-07
 
 ### Fixed

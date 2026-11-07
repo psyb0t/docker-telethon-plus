@@ -613,8 +613,14 @@ def build_app(cfg: Config) -> FastAPI:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                # asyncio.wait, not gather: if this route is cancelled while
+                # waiting, gather raises the child's CancelledError, which the
+                # server's cancel scope does not recognise as its own.
+                if pending:
+                    await asyncio.wait(pending)
                 for task in done:
+                    if task.cancelled():
+                        continue
                     error = task.exception()
                     if error is not None and not isinstance(
                         error, (WebSocketDisconnect, RuntimeError)
