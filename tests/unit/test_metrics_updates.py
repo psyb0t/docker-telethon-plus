@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
-import pytest
-
 from app.metrics import MetricsRegistry, render
-from app.updates import UpdateBroker, event_payload_json
+from app.updates import CLOSE_SHUTDOWN, CLOSE_SLOW_SUBSCRIBER, UpdateBroker, event_payload_json
 
 
 # ---------- MetricsRegistry -------------------------------------------------
@@ -78,12 +74,27 @@ async def test_subscribe_unsubscribe_isolated() -> None:
     assert q2.qsize() == 2
 
 
-async def test_full_subscriber_queue_is_dropped_not_blocked() -> None:
+async def test_a_full_subscriber_is_removed_and_told_to_close() -> None:
+    """Regression: a full subscriber used to be removed silently, leaving its
+    websocket open with nothing ever arriving again."""
     b = UpdateBroker(enabled=True, post_to_url="", post_to_timeout=1, buffer_size=2)
     q = b.subscribe()
     for i in range(5):
         b._dispatch({"type": "test", "n": i})
-    assert q.qsize() == 2, "buffer should cap at 2"
+    items = [q.get_nowait() for _ in range(q.qsize())]
+    # The oldest event made room for the close code; nothing after it arrives.
+    assert items == [{"type": "test", "n": 1}, CLOSE_SLOW_SUBSCRIBER]
+    assert b._subscribers == set()
+
+
+async def test_stop_tells_every_subscriber_to_close() -> None:
+    b = UpdateBroker(enabled=True, post_to_url="", post_to_timeout=1, buffer_size=2)
+    idle, full = b.subscribe(), b.subscribe()
+    full.put_nowait({"type": "test", "n": 0})
+    full.put_nowait({"type": "test", "n": 1})
+    await b.stop()
+    assert idle.get_nowait() == CLOSE_SHUTDOWN
+    assert [full.get_nowait(), full.get_nowait()] == [{"type": "test", "n": 1}, CLOSE_SHUTDOWN]
 
 
 async def test_disabled_broker_does_not_subscribe() -> None:

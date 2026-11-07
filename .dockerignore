@@ -27,3 +27,10 @@ Makefile
 CLAUDE.md
 git-update.sh
 .cache/
+.telemetry/
+.testing/
+scripts/
+Dockerfile.dev
+sec.sarif
+.coverage
+.flake8

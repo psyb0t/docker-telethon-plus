@@ -31,6 +31,7 @@ def _peer_from_cached(cached: dict) -> Any:
         return PeerChat(eid)
     return PeerUser(eid)
 
+
 log = logging.getLogger(__name__)
 
 
@@ -199,6 +200,7 @@ class TelethonHolder:
             connection_retries=5,
             flood_sleep_threshold=self._cfg.flood_sleep_threshold,
             timeout=self._cfg.request_timeout,
+            proxy=self._cfg.proxy,
         )
 
         log.info("connecting to Telegram")

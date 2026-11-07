@@ -157,5 +157,3 @@ def test_throttle_headers_present(http: httpx.Client) -> None:
     resp = http.get("/api/me")
     assert "X-Throttle-Multiplier" in resp.headers
     assert "X-RateLimit-Remaining-read" in resp.headers
-
-

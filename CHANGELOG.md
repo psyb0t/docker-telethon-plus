@@ -2,6 +2,22 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.6.0, 2026-11-07
+
+### Fixed
+
+- **A `/ws/updates` client that fell behind was cut off without being told.** When its queue of `TELETHON_UPDATES_BUFFER_SIZE` events filled, the server stopped sending it events but kept the websocket open, so the client waited forever, and the server's own shutdown hung on that connection. Such a client is now closed with code `1013`, which tells it that it lost events and should reconnect and catch up with `GET /api/messages`. A shutdown closes open clients with `1001`, and a client that disconnects frees its subscription at once instead of at the next event.
+- **`TELETHON_PROXY` did nothing.** It was read but never passed to Telegram, so the server and the login helper always connected directly. Both now connect through it. It takes `socks5://`, `socks4://` or `http://` as `scheme://[user:password@]host:port`, and an invalid value stops startup with a message.
+- **`TELETHON_DOWNLOAD_DIR` did nothing.** `send_file` always staged downloads under `/tmp/telethon-plus` with a predictable file name. It now uses `TELETHON_DOWNLOAD_DIR`, with a private temp file per upload, and deletes it whether the download, the size check or the send fails.
+
+### Changed
+
+- **Python 3.14 and current dependencies.** The image is built on `python:3.14.9-slim` (was 3.12) with Telethon 1.45.0 (was 1.41.2), FastAPI 0.162.0, uvicorn 0.54.0, pydantic 2.14.2, mcp 1.30.0 and cryptg 0.6.0, which now ships arm64 wheels too. `python-socks` is added for the proxy support. Dependencies are locked with hashes in `uv.lock`, and nothing released in the seven days before a dependency change enters it.
+- **The image has a healthcheck** on `/healthz`, on the port `TELETHON_HTTP_LISTEN_ADDRESS` sets.
+- **Development runs in a dev image.** `make lint` (flake8 + mypy), `make test-unit`, `make test`, `make sec` (semgrep, bandit and pip-audit into `sec.sarif`) and `make audit` run in `Dockerfile.dev`; `requirements.txt`, `tests/requirements.txt` and `tests/Dockerfile` are gone.
+- **CI checks every push to main and every pull request** with lint, unit tests and the security scan before the image is built, and a release tag no longer rebuilds the image: it waits for the main run of its commit and promotes the image that run built.
+- The scheduled pull-back of issues from the Codeberg and GitLab mirrors runs at a spread-out time of day, and the Claude Code and Codex plugin manifests no longer use em dashes in their text.
+
 ## v0.5.8, 2026-10-10
 
 Documentation only. The README's agent integrations section names [peen](https://github.com/psyb0t/peen) as an example of an agent that reads `.agents/skills/`.

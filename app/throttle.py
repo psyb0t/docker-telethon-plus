@@ -31,7 +31,7 @@ import random
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, Optional
+from typing import Any, Deque, Dict, Optional
 
 log = logging.getLogger(__name__)
 
@@ -139,7 +139,8 @@ class Throttler:
     def _jitter_seconds(self) -> float:
         if self._cfg.jitter_ms <= 0:
             return 0.0
-        return random.uniform(0, self._cfg.jitter_ms) / 1000.0
+        # Timing jitter to break up request patterns, not a secret.
+        return random.uniform(0, self._cfg.jitter_ms) / 1000.0  # nosec B311
 
     async def acquire(
         self,
@@ -226,7 +227,7 @@ class Throttler:
             self._multiplier(time.monotonic()),
         )
 
-    def snapshot(self) -> Dict[str, object]:
+    def snapshot(self) -> Dict[str, Any]:
         """Live state for /api/throttle/status and /metrics."""
         now = time.monotonic()
         mult = self._multiplier(now)

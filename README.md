@@ -95,12 +95,21 @@ All config via environment variables. Copy `.env.example` to get the full list w
 | `TELETHON_HTTP_LISTEN_ADDRESS` | no | `0.0.0.0:8080` | `host:port` to bind |
 | `TELETHON_LOG_LEVEL` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `TELETHON_REQUEST_TIMEOUT` | no | `60` | Per-request timeout in seconds |
-| `TELETHON_FLOOD_SLEEP_THRESHOLD` | no | `60` | Auto-sleep through `FLOOD_WAIT` errors below this many seconds. Telegram will rate-limit you — this is the safety valve. |
+| `TELETHON_FLOOD_SLEEP_THRESHOLD` | no | `60` | Auto-sleep through `FLOOD_WAIT` errors below this many seconds; longer ones raise. Telegram will rate-limit you, this is the safety valve. Set very high (e.g. `86400`) to never raise, but then a hostile `FLOOD_WAIT` blocks the process for its full length. |
 | `TELETHON_DEVICE_MODEL` | no | `docker-telethon-plus` | What Telegram thinks your device is |
 | `TELETHON_SYSTEM_VERSION` | no | `1.0` | Ditto for OS |
 | `TELETHON_APP_VERSION` | no | `1.0` | Ditto for app |
-| `TELETHON_DOWNLOAD_DIR` | no | `/tmp/telethon-plus` | Scratch space for `send_file` uploads |
+| `TELETHON_DOWNLOAD_DIR` | no | `/tmp/telethon-plus` | Scratch space for `send_file` uploads. Each upload gets a private temp file there that is deleted after the send, whether it worked or not. |
 | `TELETHON_AUTH_KEY` | no | `""` | When set, all endpoints require `Authorization: Bearer <key>`. `/healthz` stays public. Empty = no auth. |
+| `TELETHON_PROXY` | no | `""` | Connect to Telegram through a proxy: `socks5://`, `socks4://` or `http://`, as `scheme://[user:password@]host:port` (percent-encode special characters in the user and password). Hostnames are resolved by the proxy. An invalid value stops the container at startup. |
+| `TELETHON_READ_ONLY` | no | `false` | Refuse every write. See [Safety switches](#safety-switches). |
+| `TELETHON_DRY_RUN` | no | `false` | Validate writes and echo them back without calling Telegram. See [Safety switches](#safety-switches). |
+| `TELETHON_LOG_JSON` | no | `false` | Log JSON lines instead of plain text. |
+| `TELETHON_METRICS_ENABLED` | no | `true` | Serve Prometheus metrics at `/metrics`. |
+| `TELETHON_UPDATES_ENABLED` | no | `true` | Register incoming-event handlers and serve `/ws/updates`. See [Updates / webhooks](#updates--webhooks). |
+| `TELETHON_UPDATES_BUFFER_SIZE` | no | `256` | Events queued per `/ws/updates` client and for the webhook. |
+| `TELETHON_POST_TO_URL` | no | `""` | POST every incoming event to this URL as JSON. |
+| `TELETHON_POST_TO_TIMEOUT` | no | `10` | Timeout in seconds for each webhook POST. |
 
 ### Throttling & cache (anti-flood)
 
@@ -123,7 +132,6 @@ Telegram bans accounts that hammer it. Defaults here are conservative — meant 
 | `TELETHON_CACHE_ENABLED` | `true` | Persist resolved entities to disk |
 | `TELETHON_CACHE_PATH` | `/cache/entities.json` | Mount `/cache` as a host volume to keep this across rebuilds |
 | `TELETHON_CACHE_TTL_SECONDS` | `604800` | 7 days. Set `0` for no expiry. |
-| `TELETHON_FLOOD_SLEEP_THRESHOLD` | `60` | Telethon's reactive auto-sleep: if a `FLOOD_WAIT` is shorter than this many seconds, sleep through it. Above this, raise. Set very high (e.g. `86400`) to never raise — but then a hostile FLOOD_WAIT will block your process for the full duration. |
 
 **How the layers stack:**
 
@@ -674,7 +682,7 @@ ws.onmessage = (e) => console.log(JSON.parse(e.data));
 
 If `TELETHON_AUTH_KEY` is set, pass it as `?token=`. Browser WS clients can't set Authorization headers, hence query-string.
 
-Multiple subscribers are supported — each gets its own queue. Slow consumers drop events at `TELETHON_UPDATES_BUFFER_SIZE`.
+Multiple subscribers are supported, each with its own queue of `TELETHON_UPDATES_BUFFER_SIZE` events. A client that falls a whole buffer behind is disconnected with close code `1013` (try again later). It has lost events, so reconnect and read what you missed with `GET /api/messages`. When the server stops, open clients are closed with `1001`.
 
 ### Outbound webhook — `TELETHON_POST_TO_URL`
 
@@ -764,16 +772,22 @@ Then set `TELETHON_PLUS_URL` (and `TELETHON_AUTH_KEY` if the server requires aut
 
 ## Development
 
+Everything except `build`, `run` and `login` runs in a dev image (`Dockerfile.dev`) with the locked environment baked in, so the host needs only Docker and make.
+
 ```bash
 make build        # build psyb0t/telethon-plus:latest
-make build-test   # build psyb0t/telethon-plus:latest-test
 make run          # run locally on :8080 (reads .env)
-make login        # interactive login — writes TELETHON_SESSION to .env automatically
-make lint         # flake8 + pyright
+make login        # interactive login, writes TELETHON_SESSION to .env automatically
+make lint         # flake8 + mypy
 make format       # isort + black
-make test         # run integration tests in Docker
+make test-unit    # unit tests with coverage, no Docker or Telegram needed
+make test         # integration tests against a real Telegram account
+make sec          # semgrep + bandit + pip-audit into sec.sarif (reports, never fails)
+make audit        # pip-audit on the locked runtime dependencies (fails on a finding)
 make clean        # remove built images
 ```
+
+Dependencies live in `pyproject.toml` and `uv.lock`. `[tool.uv] exclude-newer` keeps any release from the last seven days out of the lock; change dependencies with `make pkg-add`, `make pkg-update`, `make pkg-remove` or `make pkg-upgrade`, which move that date to seven days ago first. CI runs `make lint`, `make test-unit` and `make sec` on every push to main and every pull request.
 
 ## Tests
 
@@ -792,7 +806,7 @@ make test
 
 `TEST_CHAT` is where test messages land. Use `me` for Saved Messages — private, yours, no one else sees it. All chat reference formats from the [Tools](#tools) section work here.
 
-`make test` builds both images and runs pytest inside Docker with the socket mounted. No setup beyond `.env`. If credentials are missing, the suite skips cleanly.
+`make test` builds the image and runs pytest in the dev image with the Docker socket mounted. No setup beyond `.env`. If credentials are missing, the suite skips cleanly.
 
 | Test file | What it beats on |
 |---|---|

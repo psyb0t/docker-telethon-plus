@@ -1,0 +1,70 @@
+[project]
+name = "telethon-plus"
+# Placeholder like server.json and the plugin package.json: the release version
+# is the git tag. uv requires the field; nothing is built from it.
+version = "0.0.0"
+description = "Telethon (MTProto userbot) behind a JSON HTTP API and an MCP endpoint, with throttling, an entity cache and live updates."
+license = { text = "WTFPL" }
+requires-python = ">=3.14,<3.15"
+authors = [{ name = "psyb0t" }]
+keywords = ["telegram", "telethon", "mtproto", "userbot", "fastapi", "mcp", "model-context-protocol"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+]
+
+# Exact pins: the image is the product, so every build installs the same
+# graph. uv.lock adds hashes and the transitive pins.
+dependencies = [
+    "telethon==1.45.0",
+    "fastapi==0.162.0",
+    "uvicorn[standard]==0.54.0",
+    "pydantic==2.14.2",
+    # v2 removes mcp.server.fastmcp, which app/server.py builds on.
+    "mcp==1.30.0",
+    "httpx==0.28.1",
+    # Native AES for Telethon; it falls back to pure Python without it.
+    "cryptg==0.6.0",
+    # Telethon connects through TELETHON_PROXY only when python-socks is
+    # installed.
+    "python-socks[asyncio]==3.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/psyb0t/docker-telethon-plus"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1",
+    "pytest-cov==7.1.0",
+    "python-dotenv==1.2.4",
+    "flake8==7.5.0",
+    "mypy==2.4.1",
+    "black==26.10.1",
+    "isort==9.0.2",
+]
+
+[tool.uv]
+# The image runs app/ from its source tree; there is no package to build.
+package = false
+# Supply-chain defense: only install package versions older than
+# `exclude-newer`. Refreshed by the make pkg-* targets to UTC midnight seven
+# days before the change (scripts/bump_exclude_newer.sh), so a release
+# published in the last week never enters the lock.
+exclude-newer = "2026-10-31T00:00:00Z"
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.14"
+ignore_missing_imports = true
+warn_unused_ignores = true

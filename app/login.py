@@ -24,6 +24,7 @@ async def _run(cfg: Config) -> None:
         device_model=cfg.device_model,
         system_version=cfg.system_version,
         app_version=cfg.app_version,
+        proxy=cfg.proxy,
     )
     await client.start()
 

@@ -36,3 +36,9 @@ git-update.sh
 
 # Review receipt for the local release script.
 git-update.sh.debot
+.telemetry/
+
+# make sec / coverage output
+sec.sarif
+.coverage
+coverage.xml

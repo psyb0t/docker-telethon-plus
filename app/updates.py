@@ -18,12 +18,23 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 import httpx
 from telethon import TelegramClient, events
 
 log = logging.getLogger(__name__)
+
+# WebSocket close codes the broker asks a subscriber's route to close with.
+# 1013 (try again later): the subscriber fell a whole buffer behind and lost
+# events, so its client must reconnect and catch up from /api/messages.
+# 1001 (going away): the server is stopping.
+CLOSE_SLOW_SUBSCRIBER = 1013
+CLOSE_SHUTDOWN = 1001
+
+# A subscriber queue carries event payloads, then at most one close code.
+Item = Union[Dict[str, Any], int]
+SubscriberQueue = asyncio.Queue[Item]
 
 
 def _event_to_dict(event: Any) -> Dict[str, Any]:
@@ -84,7 +95,7 @@ class UpdateBroker:
         self._post_to_url = post_to_url
         self._post_to_timeout = post_to_timeout
         self._buffer_size = buffer_size
-        self._subscribers: Set[asyncio.Queue[Dict[str, Any]]] = set()
+        self._subscribers: Set[SubscriberQueue] = set()
         self._webhook_queue: Optional[asyncio.Queue[Dict[str, Any]]] = None
         self._webhook_task: Optional[asyncio.Task[None]] = None
         self._client: Optional[TelegramClient] = None
@@ -123,15 +134,19 @@ class UpdateBroker:
 
     def _dispatch(self, payload: Dict[str, Any]) -> None:
         # WS subscribers
-        dead: List[asyncio.Queue[Dict[str, Any]]] = []
+        dead: List[SubscriberQueue] = []
         for q in self._subscribers:
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
-                log.warning("update subscriber dropped event (buffer full)")
+                log.warning("update subscriber fell %d events behind; closing it", q.maxsize)
                 dead.append(q)
+        # A full subscriber is removed and told to close. Only removing it
+        # left its websocket open and silent forever: the client could not
+        # tell it had been dropped.
         for q in dead:
             self._subscribers.discard(q)
+            _close(q, CLOSE_SLOW_SUBSCRIBER)
 
         # Webhook queue
         if self._webhook_queue is not None:
@@ -141,7 +156,8 @@ class UpdateBroker:
                 log.warning("webhook queue full — dropping event")
 
     async def _webhook_worker(self) -> None:
-        assert self._webhook_queue is not None
+        if self._webhook_queue is None:
+            raise RuntimeError("webhook worker started without a queue")
         async with httpx.AsyncClient(timeout=self._post_to_timeout) as http:
             while True:
                 payload = await self._webhook_queue.get()
@@ -160,12 +176,12 @@ class UpdateBroker:
                 except Exception:  # noqa: BLE001
                     log.exception("webhook worker crashed handling event")
 
-    def subscribe(self) -> asyncio.Queue[Dict[str, Any]]:
-        q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=self._buffer_size)
+    def subscribe(self) -> SubscriberQueue:
+        q: SubscriberQueue = asyncio.Queue(maxsize=self._buffer_size)
         self._subscribers.add(q)
         return q
 
-    def unsubscribe(self, q: asyncio.Queue[Dict[str, Any]]) -> None:
+    def unsubscribe(self, q: SubscriberQueue) -> None:
         self._subscribers.discard(q)
 
     async def stop(self) -> None:
@@ -174,7 +190,20 @@ class UpdateBroker:
             with suppress(asyncio.CancelledError):
                 await self._webhook_task
             self._webhook_task = None
+        for q in self._subscribers:
+            _close(q, CLOSE_SHUTDOWN)
         self._subscribers.clear()
+
+
+def _close(q: SubscriberQueue, code: int) -> None:
+    """Queue a close code as the subscriber's last item. On a full queue the
+    oldest event makes room: the client is losing events either way."""
+    try:
+        q.put_nowait(code)
+    except asyncio.QueueFull:
+        with suppress(asyncio.QueueEmpty):
+            q.get_nowait()
+        q.put_nowait(code)
 
 
 def event_payload_json(payload: Dict[str, Any]) -> str:

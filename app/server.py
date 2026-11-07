@@ -36,6 +36,7 @@ Routes
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -175,7 +176,7 @@ def _mount_mcp_tool(mcp: FastMCP, holder: TelethonHolder, tool: Tool) -> None:
 
     _call.__name__ = tool.name
     _call.__doc__ = tool.description
-    _call.__signature__ = _model_to_signature(params_model)
+    setattr(_call, "__signature__", _model_to_signature(params_model))
     _call.__annotations__ = {
         **{n: f.annotation for n, f in params_model.model_fields.items()},
         "return": Any,
@@ -311,7 +312,9 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/messages/forward")
     async def forward_messages(request: Request) -> JSONResponse:
-        return JSONResponse(content=await _run(holder, "forward_messages", await _parse_body(request)))
+        return JSONResponse(
+            content=await _run(holder, "forward_messages", await _parse_body(request))
+        )
 
     @app.post("/api/messages/read")
     async def mark_read(request: Request) -> JSONResponse:
@@ -319,11 +322,13 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.delete("/api/messages")
     async def delete_messages(request: Request) -> JSONResponse:
-        return JSONResponse(content=await _run(holder, "delete_messages", await _parse_body(request)))
+        return JSONResponse(
+            content=await _run(holder, "delete_messages", await _parse_body(request))
+        )
 
     @app.get("/api/messages/{message_id}")
     async def get_message_route(message_id: int, request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
+        raw: Dict[str, Any] = dict(request.query_params)
         raw["message_id"] = message_id
         return JSONResponse(content=await _run(holder, "get_message", raw))
 
@@ -396,7 +401,9 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/participants")
     async def get_participants(request: Request) -> JSONResponse:
-        return JSONResponse(content=await _run(holder, "get_participants", dict(request.query_params)))
+        return JSONResponse(
+            content=await _run(holder, "get_participants", dict(request.query_params))
+        )
 
     # ---- Chats ---------------------------------------------------------
 
@@ -418,7 +425,9 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/chats/invite")
     async def join_via_invite_route(request: Request) -> JSONResponse:
-        return JSONResponse(content=await _run(holder, "join_via_invite", await _parse_body(request)))
+        return JSONResponse(
+            content=await _run(holder, "join_via_invite", await _parse_body(request))
+        )
 
     @app.get("/api/chats/{chat}/linked")
     async def get_linked_chat_route(chat: str) -> JSONResponse:
@@ -460,7 +469,7 @@ def build_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/polls/{message_id}/results")
     async def poll_results_route(message_id: int, request: Request) -> JSONResponse:
-        raw = dict(request.query_params)
+        raw: Dict[str, Any] = dict(request.query_params)
         raw["message_id"] = message_id
         return JSONResponse(content=await _run(holder, "get_poll_results", raw))
 
@@ -476,13 +485,41 @@ def build_app(cfg: Config) -> FastAPI:
                     return
             await ws.accept()
             queue = holder.updates.subscribe()
-            try:
+
+            async def forward() -> None:
                 while True:
-                    payload = await queue.get()
-                    await ws.send_text(event_payload_json(payload))
-            except WebSocketDisconnect:
-                pass
+                    item = await queue.get()
+                    if isinstance(item, int):
+                        await ws.close(code=item)
+                        return
+                    await ws.send_text(event_payload_json(item))
+
+            async def until_client_leaves() -> None:
+                # Read until the client disconnects, so a gone client frees
+                # its subscription now instead of at the next event.
+                while True:
+                    message = await ws.receive()
+                    if message["type"] == "websocket.disconnect":
+                        return
+
+            tasks = {
+                asyncio.create_task(forward()),
+                asyncio.create_task(until_client_leaves()),
+            }
+            try:
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    error = task.exception()
+                    if error is not None and not isinstance(
+                        error, (WebSocketDisconnect, RuntimeError)
+                    ):
+                        log.warning("updates websocket ended with an error: %r", error)
             finally:
+                for task in tasks:
+                    task.cancel()
                 holder.updates.unsubscribe(queue)
 
     app.mount("/mcp", mcp.streamable_http_app())

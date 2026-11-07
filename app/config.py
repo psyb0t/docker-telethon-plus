@@ -5,6 +5,11 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
+from urllib.parse import unquote, urlsplit
+
+# TELETHON_PROXY schemes Telethon can connect through (with python-socks).
+PROXY_SCHEMES = ("socks5", "socks4", "http")
 
 
 def _required(name: str) -> str:
@@ -42,9 +47,44 @@ def _split_host_port(addr: str) -> tuple[str, int]:
         )
     host, _, port = addr.rpartition(":")
     try:
-        return host or "0.0.0.0", int(port)
+        # All interfaces when no host is given: the server runs in a container
+        # and is reached through its published port.
+        return host or "0.0.0.0", int(port)  # nosec B104
     except ValueError as exc:
         raise RuntimeError(f"invalid port in {addr!r}") from exc
+
+
+def parse_proxy(raw: str) -> Optional[Dict[str, Any]]:
+    """TELETHON_PROXY as the dict TelegramClient(proxy=...) takes, or None
+    when it is empty.
+
+    The value is scheme://[user:password@]host:port with scheme socks5,
+    socks4 or http; user and password may be percent-encoded. rdns is on, so
+    the proxy resolves Telegram's hostnames.
+    """
+    value = raw.strip()
+    if not value:
+        return None
+    parts = urlsplit(value)
+    scheme = parts.scheme.lower()
+    if scheme not in PROXY_SCHEMES:
+        raise RuntimeError(
+            f"TELETHON_PROXY must start with {', '.join(s + '://' for s in PROXY_SCHEMES)}"
+        )
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise RuntimeError("TELETHON_PROXY has an invalid port") from exc
+    if not parts.hostname or port is None:
+        raise RuntimeError("TELETHON_PROXY must be scheme://[user:password@]host:port")
+    return {
+        "proxy_type": scheme,
+        "addr": parts.hostname,
+        "port": port,
+        "username": unquote(parts.username) if parts.username else None,
+        "password": unquote(parts.password) if parts.password else None,
+        "rdns": True,
+    }
 
 
 @dataclass(frozen=True)
@@ -60,7 +100,7 @@ class Config:
     device_model: str
     system_version: str
     app_version: str
-    proxy: str
+    proxy: Optional[Dict[str, Any]]
     download_dir: str
     auth_key: str
     # Throttling
@@ -131,8 +171,11 @@ class Config:
             device_model=os.environ.get("TELETHON_DEVICE_MODEL", "docker-telethon-plus"),
             system_version=os.environ.get("TELETHON_SYSTEM_VERSION", "1.0"),
             app_version=os.environ.get("TELETHON_APP_VERSION", "1.0"),
-            proxy=os.environ.get("TELETHON_PROXY", ""),
-            download_dir=os.environ.get("TELETHON_DOWNLOAD_DIR", "/tmp/telethon-plus"),
+            proxy=parse_proxy(os.environ.get("TELETHON_PROXY", "")),
+            # Files in it are created with mkstemp (tools._send_file).
+            download_dir=os.environ.get(
+                "TELETHON_DOWNLOAD_DIR", "/tmp/telethon-plus"  # nosec B108
+            ),
             auth_key=os.environ.get("TELETHON_AUTH_KEY", "").strip(),
             throttle_enabled=_bool("TELETHON_THROTTLE_ENABLED", True),
             throttle_global_interval_ms=_int("TELETHON_THROTTLE_GLOBAL_INTERVAL_MS", 50),

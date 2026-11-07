@@ -13,7 +13,9 @@ resolveUsername calls.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -53,7 +55,10 @@ from telethon.tl.types import (
 from app.client import TelethonHolder
 
 ParamsModel = type[BaseModel]
-Handler = Callable[[TelethonHolder, BaseModel], Awaitable[Any]]
+# Each handler takes its own params model; Callable parameters are
+# contravariant, so the registry types the second argument as Any rather than
+# BaseModel. server._invoke validates against params_model before the call.
+Handler = Callable[[TelethonHolder, Any], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -325,7 +330,7 @@ async def _get_dialogs(
     # enough hits or run out of dialogs.
     if params.search:
         q = params.search.lower()
-        out: List[Dict[str, Any]] = []
+        matches: List[Dict[str, Any]] = []
         seen = 0
         async with holder.guard("read") as client:
             async for dialog in client.iter_dialogs(archived=params.archived):
@@ -343,11 +348,11 @@ async def _get_dialogs(
                         uname = getattr(dialog.entity, "username", None)
                         if uname:
                             holder.cache.put(uname, dialog.entity)
-                    out.append(item)
-                    if len(out) >= params.limit:
+                    matches.append(item)
+                    if len(matches) >= params.limit:
                         break
         holder.throttle.record_extra("read", max(0, (seen - 1) // DIALOGS_PAGE))
-        return out
+        return matches
 
     async with holder.guard("read") as client:
         dialogs = await client.get_dialogs(
@@ -578,29 +583,27 @@ async def _send_file(
     if holder.dry_run:
         return {"dry_run": True, "would_send_file": params.model_dump(mode="json")}
 
-    os.makedirs("/tmp/telethon-plus", exist_ok=True)
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-        async with http.stream("GET", params.file_url) as resp:
-            resp.raise_for_status()
-            length = int(resp.headers.get("content-length") or 0)
-            if length and length > params.max_bytes:
-                raise ValueError(
-                    f"file too large: {length} > {params.max_bytes}"
-                )
-
-            tmp_path = f"/tmp/telethon-plus/upload-{os.getpid()}-{id(resp)}"
-            written = 0
-            with open(tmp_path, "wb") as fh:
-                async for chunk in resp.aiter_bytes(1 << 16):
-                    written += len(chunk)
-                    if written > params.max_bytes:
-                        os.unlink(tmp_path)
-                        raise ValueError(
-                            f"file too large: exceeded {params.max_bytes}"
-                        )
-                    fh.write(chunk)
-
+    # TELETHON_DOWNLOAD_DIR; mkstemp gives the file an unguessable name that
+    # only this process can open. One finally removes it whether the
+    # download or the send fails.
+    os.makedirs(holder.cfg.download_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="upload-", dir=holder.cfg.download_dir)
     try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
+            async with http.stream("GET", params.file_url) as resp:
+                resp.raise_for_status()
+                length = int(resp.headers.get("content-length") or 0)
+                if length and length > params.max_bytes:
+                    raise ValueError(f"file too large: {length} > {params.max_bytes}")
+                written = 0
+                with os.fdopen(fd, "wb") as fh:
+                    fd = -1
+                    async for chunk in resp.aiter_bytes(1 << 16):
+                        written += len(chunk)
+                        if written > params.max_bytes:
+                            raise ValueError(f"file too large: exceeded {params.max_bytes}")
+                        fh.write(chunk)
+
         async with holder.guard("send", chat_key=_chat_key(params.chat)) as client:
             msg = await client.send_file(
                 entity=entity,
@@ -611,7 +614,9 @@ async def _send_file(
                 force_document=params.force_document,
             )
     finally:
-        if os.path.exists(tmp_path):
+        if fd != -1:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp_path)
 
     return _message_to_dict(msg)
@@ -649,7 +654,9 @@ async def _get_participants(
     PARTICIPANTS_PAGE = 200  # channels.getParticipants page size
     entity = await holder.resolve_entity(params.chat)
     # get_participants pulls FullChannel-ish data; classify under get_full.
-    async with holder.guard("get_full", chat_key=_chat_key(params.chat), chat_kind="read") as client:
+    async with holder.guard(
+        "get_full", chat_key=_chat_key(params.chat), chat_kind="read"
+    ) as client:
         participants = await client.get_participants(
             entity,
             limit=params.limit,
@@ -1631,4 +1638,3 @@ _register(
         handler=_account_health,
     )
 )
-

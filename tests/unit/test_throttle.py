@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-import pytest
 
 from app.throttle import BucketSpec, Throttler, ThrottleConfig
 
@@ -66,7 +65,9 @@ async def test_per_chat_send_and_read_timelines_are_independent() -> None:
     await t.acquire("send", "chatA", chat_kind="send")
     await t.acquire("read", "chatA", chat_kind="read")
     elapsed = time.monotonic() - start
-    assert elapsed < 0.05, f"different timelines should not block each other; got {elapsed*1000:.0f}ms"
+    assert elapsed < 0.05, (
+        f"different timelines should not block each other; got {elapsed*1000:.0f}ms"
+    )
 
 
 async def test_read_per_chat_interval_enforced() -> None:
@@ -75,7 +76,9 @@ async def test_read_per_chat_interval_enforced() -> None:
     await t.acquire("read", "chatB", chat_kind="read")
     await t.acquire("read", "chatB", chat_kind="read")
     elapsed = time.monotonic() - start
-    assert 0.18 < elapsed < 0.30, f"two same-chat reads should wait ~200ms, got {elapsed*1000:.0f}ms"
+    assert 0.18 < elapsed < 0.30, (
+        f"two same-chat reads should wait ~200ms, got {elapsed*1000:.0f}ms"
+    )
 
 
 async def test_send_per_chat_interval_enforced() -> None:
@@ -84,7 +87,9 @@ async def test_send_per_chat_interval_enforced() -> None:
     await t.acquire("send", "chatC", chat_kind="send")
     await t.acquire("send", "chatC", chat_kind="send")
     elapsed = time.monotonic() - start
-    assert 0.28 < elapsed < 0.40, f"two same-chat sends should wait ~300ms, got {elapsed*1000:.0f}ms"
+    assert 0.28 < elapsed < 0.40, (
+        f"two same-chat sends should wait ~300ms, got {elapsed*1000:.0f}ms"
+    )
 
 
 async def test_per_chat_does_not_affect_other_chats() -> None:

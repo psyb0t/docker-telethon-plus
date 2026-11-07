@@ -20,7 +20,9 @@ import pytest
 # ---------- get_messages pagination ----------------------------------------
 
 
-async def test_get_messages_pages_below_threshold_makes_one_call(holder, make_entity, make_message) -> None:
+async def test_get_messages_pages_below_threshold_makes_one_call(
+    holder, make_entity, make_message
+) -> None:
     from app.tools import REGISTRY
 
     holder._client.get_entity = AsyncMock(return_value=make_entity(1))
@@ -83,7 +85,9 @@ async def test_get_messages_stops_on_short_page(holder, make_entity, make_messag
     assert holder._client.get_messages.await_count == 1
 
 
-async def test_get_messages_consumes_one_bucket_slot_per_page(holder, make_entity, make_message) -> None:
+async def test_get_messages_consumes_one_bucket_slot_per_page(
+    holder, make_entity, make_message
+) -> None:
     from app.tools import REGISTRY
 
     holder._client.get_entity = AsyncMock(return_value=make_entity(1))

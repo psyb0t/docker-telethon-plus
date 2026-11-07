@@ -395,7 +395,7 @@ Event payload:
 
 `type` is `NewMessage`, `MessageEdited`, `MessageDeleted`, or `ChatAction` — same shape, fewer fields on the non-message ones.
 
-The same events also stream over **WebSocket** at `GET /ws/updates` (pass `?token=<TELETHON_AUTH_KEY>` when auth is on — browsers can't set the Authorization header). Multiple subscribers each get their own queue; slow consumers drop events at `TELETHON_UPDATES_BUFFER_SIZE` (default 256). Updates are only registered when `TELETHON_UPDATES_ENABLED=true` (the default).
+The same events also stream over **WebSocket** at `GET /ws/updates` (pass `?token=<TELETHON_AUTH_KEY>` when auth is on, since browsers can't set the Authorization header). Multiple subscribers each get their own queue of `TELETHON_UPDATES_BUFFER_SIZE` events (default 256). A client that falls that far behind is closed with code `1013`. Reconnect, then read what was missed with `GET /api/messages`. Server shutdown closes clients with `1001`. Updates are only registered when `TELETHON_UPDATES_ENABLED=true` (the default).
 
 ## MCP Endpoint
 

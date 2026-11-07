@@ -107,7 +107,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 | `TELETHON_DEVICE_MODEL` | `docker-telethon-plus` | Device string Telegram sees |
 | `TELETHON_SYSTEM_VERSION` | `1.0` | OS string |
 | `TELETHON_APP_VERSION` | `1.0` | App version string |
-| `TELETHON_PROXY` | `""` | e.g. `socks5://user:pass@host:port` |
+| `TELETHON_PROXY` | `""` | `socks5://`, `socks4://` or `http://` as `scheme://[user:password@]host:port`; an invalid value stops startup |
 | `TELETHON_DOWNLOAD_DIR` | `/tmp/telethon-plus` | Scratch dir for `send_file` uploads |
 | `TELETHON_METRICS_ENABLED` | `true` | Expose `GET /metrics` |
 
@@ -143,7 +143,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 | Var | Default | Notes |
 |---|---|---|
 | `TELETHON_UPDATES_ENABLED` | `true` | Register incoming-event handlers and expose `/ws/updates` |
-| `TELETHON_UPDATES_BUFFER_SIZE` | `256` | Per-subscriber WS queue depth; slow consumers drop events past this |
+| `TELETHON_UPDATES_BUFFER_SIZE` | `256` | Per-subscriber WS queue depth; a client that falls this far behind is closed with code 1013 and must reconnect and catch up with `GET /api/messages` |
 | `TELETHON_POST_TO_URL` | `""` | Outbound webhook — every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. **Data exfiltration warning:** once set, EVERY incoming message's content, sender metadata, and account activity is forwarded to this URL, indefinitely, for as long as the container runs. Use only a trusted HTTPS endpoint you control — never a third party's URL. |
 | `TELETHON_POST_TO_TIMEOUT` | `10` | Webhook POST timeout (seconds) |
 

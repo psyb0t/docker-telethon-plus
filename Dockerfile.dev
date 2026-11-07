@@ -1,0 +1,56 @@
+# Sandboxed dev container: every make target except build/run runs inside
+# this so the host stays clean. Has uv, the locked app + dev environment in
+# /opt/venv, the security scanners, and the docker CLI for `make test`, which
+# runs the production image through the mounted socket.
+FROM python:3.14.9-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/work \
+    TZ=UTC
+
+# The docker repository key arrives through a pipe; fail the build if curl fails.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+        jq \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+        https://download.docker.com/linux/debian trixie stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.15@sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3 /uv /usr/local/bin/uv
+
+WORKDIR /work
+
+# Security scanners for `make sec`, kept out of the application environment
+# because semgrep brings its own MCP dependency. Reached only through the
+# /usr/local/bin symlinks.
+RUN python3 -m venv /opt/sectools \
+    && /opt/sectools/bin/pip install --no-cache-dir \
+        semgrep==1.183.0 \
+        bandit==1.9.4 \
+        bandit-sarif-formatter==1.1.1 \
+        pip-audit==2.10.1 \
+    && ln -s /opt/sectools/bin/semgrep /opt/sectools/bin/bandit \
+        /opt/sectools/bin/pip-audit /usr/local/bin/
+
+# Only the manifests, so this layer rebuilds only when they change. The
+# source lives on the bind mount, importable through PYTHONPATH=/work.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --group dev \
+    && chmod -R a+rX /opt/venv
