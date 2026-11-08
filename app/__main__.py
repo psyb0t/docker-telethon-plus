@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -23,6 +24,12 @@ from app.server import build_app
 
 TEXT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 HACHOIR_LOGGER = logging.getLogger("hachoir")
+# /ws/updates takes the auth key as ?token=, because browsers cannot set a
+# header on a websocket, and uvicorn logs that path whole when it accepts or
+# refuses the connection.
+QUERY_TOKEN = re.compile(r"([?&]token=)[^&\s\"']*")
+REDACTED = "[redacted]"
+UVICORN_LOGGERS = ("uvicorn.error", "uvicorn.access")
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -43,12 +50,30 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+class RedactQueryToken(logging.Filter):
+    """Replaces the value of a token= query parameter in the record's text."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = QUERY_TOKEN.sub(r"\g<1>" + REDACTED, message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = None
+        return True
+
+
 def configure_logging(cfg: Config) -> None:
     handler = logging.StreamHandler()
     if cfg.log_json:
         handler.setFormatter(JsonLogFormatter())
     logging.basicConfig(level=cfg.log_level, format=TEXT_LOG_FORMAT, handlers=[handler])
     logging.getLogger("telethon").setLevel(telethon_log_level(cfg.log_level))
+    # On the loggers rather than a handler, so they hold in both log formats:
+    # uvicorn's text config replaces the handlers but keeps logger filters.
+    for name in UVICORN_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, RedactQueryToken) for f in logger.filters):
+            logger.addFilter(RedactQueryToken())
     _route_hachoir_logs()
 
 

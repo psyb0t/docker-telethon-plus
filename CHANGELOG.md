@@ -2,6 +2,12 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.3, 2026-11-08
+
+### Security
+
+- **The auth key showed up in the logs.** A `/ws/updates` client sends `TELETHON_AUTH_KEY` as `?token=`, and uvicorn logged the whole path every time it accepted or refused the connection, so anyone who could read the container's logs could read the key. The `token` value is now replaced with `[redacted]` in uvicorn's log lines, in both log formats. Rotate `TELETHON_AUTH_KEY` if your logs are kept or shipped anywhere. See [docs/security.md](https://psyb0t.github.io/docker-telethon-plus/security/).
+
 ## v0.7.2, 2026-11-08
 
 ### Fixed

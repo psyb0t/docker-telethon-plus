@@ -26,7 +26,7 @@ With it set:
 | --- | --- |
 | `/api/...` | Yes, as `Authorization: Bearer <key>`. |
 | `/mcp/` | Yes, as `Authorization: Bearer <key>`. |
-| `/ws/updates` | Yes, as `?token=<key>`, because browsers cannot set headers on a websocket; a wrong token refuses the handshake with `403`. Query strings can end up in proxy access logs. |
+| `/ws/updates` | Yes, as `?token=<key>`, because browsers cannot set headers on a websocket; a wrong token refuses the handshake with `403`. telethon-plus's own logs show the token as `[redacted]`, but a reverse proxy in front of it may log the query string whole. |
 | `/healthz` | No. It only says whether the server is up. |
 | `/metrics` | No. It shows tool names and call counts, flood events and cache size, but no message content. |
 

@@ -13,7 +13,7 @@ import pytest
 from uvicorn.config import LOGGING_CONFIG
 
 import app.__main__ as main_mod
-from app.__main__ import JsonLogFormatter
+from app.__main__ import JsonLogFormatter, RedactQueryToken
 
 
 @pytest.fixture
@@ -82,6 +82,10 @@ def served(base_env: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Dict[str
     monkeypatch.setattr(logging, "basicConfig", basic_config)
     yield seen
     telethon_logger.setLevel(level_before)
+    for name in main_mod.UVICORN_LOGGERS:
+        logger = logging.getLogger(name)
+        for redactor in [f for f in logger.filters if isinstance(f, RedactQueryToken)]:
+            logger.removeFilter(redactor)
 
 
 def test_log_json_installs_the_json_formatter_and_hands_uvicorn_to_it(
@@ -137,3 +141,46 @@ def test_hachoir_warnings_go_through_logging_not_stderr(
     (record,) = [r for r in caplog.records if r.name == "hachoir"]
     assert record.levelno == logging.DEBUG
     assert record.getMessage() == "[warn] odd header"
+
+
+@pytest.mark.parametrize("log_json", ["true", "false"])
+def test_the_websocket_token_never_reaches_the_log(
+    served: Dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    log_json: str,
+) -> None:
+    """Regression: uvicorn logged the accepted /ws/updates path whole, so the
+    auth key passed as ?token= was in every log."""
+    monkeypatch.setenv("TELETHON_LOG_JSON", log_json)
+    main_mod.main()
+    main_mod.main()
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        logging.getLogger("uvicorn.error").info(
+            '%s - "WebSocket %s" [accepted]', "172.19.0.9:60524", "/ws/updates?token=s3cret-key"
+        )
+
+    (record,) = [r for r in caplog.records if r.name == "uvicorn.error"]
+    assert record.getMessage() == (
+        '172.19.0.9:60524 - "WebSocket /ws/updates?token=[redacted]" [accepted]'
+    )
+    for name in main_mod.UVICORN_LOGGERS:
+        assert sum(isinstance(f, RedactQueryToken) for f in logging.getLogger(name).filters) == 1
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            "GET /api/messages?chat=x&token=abc&limit=5",
+            "GET /api/messages?chat=x&token=[redacted]&limit=5",
+        ),
+        ("GET /api/messages?chat=x&limit=5", "GET /api/messages?chat=x&limit=5"),
+        ("GET /api/messages?mytoken=abc", "GET /api/messages?mytoken=abc"),
+    ],
+)
+def test_only_the_token_parameter_is_redacted(line: str, expected: str) -> None:
+    record = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, "%s", (line,), None)
+    assert RedactQueryToken().filter(record) is True
+    assert record.getMessage() == expected
