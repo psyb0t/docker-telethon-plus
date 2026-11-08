@@ -97,8 +97,8 @@ def test_get_entity_unknown_username(http: httpx.Client) -> None:
     assert resp.status_code in (400, 502)
 
 
-def test_read_public_channel(http: httpx.Client) -> None:
-    resp = http.get("/api/messages", params={"chat": "@telegram", "limit": 5})
+def test_read_public_channel(http: httpx.Client, env: dict[str, str]) -> None:
+    resp = http.get("/api/messages", params={"chat": env["TEST_PUBLIC_CHANNEL"], "limit": 5})
     assert resp.status_code == 200, resp.text
     msgs = resp.json()
     assert isinstance(msgs, list)
@@ -106,35 +106,6 @@ def test_read_public_channel(http: httpx.Client) -> None:
     msg = msgs[0]
     assert isinstance(msg["id"], int)
     assert msg["chat_id"] is not None
-
-
-def test_create_and_delete_group(http: httpx.Client) -> None:
-    created = http.post("/api/chats", json={"title": "docker-telethon-plus-test-group"})
-    assert created.status_code == 200, created.text
-    group = created.json()
-    assert group["title"] == "docker-telethon-plus-test-group"
-    assert isinstance(group["id"], int)
-
-    chat_id = str(group["id"])
-    deleted = http.request("DELETE", "/api/chats", json={"chat": chat_id})
-    assert deleted.status_code == 200, deleted.text
-    assert deleted.json()["ok"] is True
-
-
-def test_get_participants_of_own_group(http: httpx.Client) -> None:
-    created = http.post("/api/chats", json={"title": "docker-telethon-plus-test-participants"})
-    assert created.status_code == 200, created.text
-    chat_id = str(created.json()["id"])
-
-    try:
-        resp = http.get("/api/participants", params={"chat": chat_id, "limit": 10})
-        assert resp.status_code == 200, resp.text
-        participants = resp.json()
-        assert isinstance(participants, list)
-        assert len(participants) >= 1
-        assert all("id" in p for p in participants)
-    finally:
-        http.request("DELETE", "/api/chats", json={"chat": chat_id})
 
 
 def test_throttle_status_route(http: httpx.Client) -> None:

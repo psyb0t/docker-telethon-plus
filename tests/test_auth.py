@@ -1,54 +1,21 @@
-"""Auth middleware — Bearer token enforced on all endpoints except /healthz."""
+"""Auth: the bearer token guards every route except /healthz and /metrics."""
 
 from __future__ import annotations
 
-import subprocess
 from typing import Iterator
 
 import httpx
 import pytest
-from conftest import CONTAINER, IMAGE, _free_port, _stop_container, _wait_ready
+from conftest import Server
+from websockets.exceptions import InvalidStatus
+from websockets.sync.client import connect
 
 AUTH_KEY = "test-auth-key-do-not-use-in-prod"
 
 
-def _start_authed_container(env: dict[str, str]) -> str:
-    _stop_container()
-    port = _free_port()
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "-d",
-            "--rm",
-            "--name",
-            CONTAINER,
-            "-p",
-            f"{port}:8080",
-            "-e",
-            f"TELETHON_API_ID={env['TELETHON_API_ID']}",
-            "-e",
-            f"TELETHON_API_HASH={env['TELETHON_API_HASH']}",
-            "-e",
-            f"TELETHON_SESSION={env['TELETHON_SESSION']}",
-            "-e",
-            f"TELETHON_AUTH_KEY={AUTH_KEY}",
-            IMAGE,
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    return f"http://127.0.0.1:{port}"
-
-
-@pytest.fixture(scope="module")
-def authed_url(env: dict[str, str]) -> Iterator[str]:
-    url = _start_authed_container(env)
-    try:
-        _wait_ready(url)
-        yield url
-    finally:
-        _stop_container()
+@pytest.fixture()
+def authed_url(server: Server) -> Iterator[str]:
+    yield server.ensure(TELETHON_AUTH_KEY=AUTH_KEY)
 
 
 def test_no_token_rejected(authed_url: str) -> None:
@@ -101,3 +68,19 @@ def test_mcp_correct_token_passes_through(authed_url: str) -> None:
         timeout=10.0,
     )
     assert resp.status_code != 401
+
+
+def test_the_updates_socket_needs_the_token(authed_url: str) -> None:
+    ws_url = authed_url.replace("http://", "ws://") + "/ws/updates"
+    with pytest.raises(InvalidStatus) as refused:
+        with connect(f"{ws_url}?token=wrong-key", open_timeout=10):
+            pass
+    assert refused.value.response.status_code == 403
+    with connect(f"{ws_url}?token={AUTH_KEY}", open_timeout=10):
+        pass
+
+
+def test_metrics_stay_public(authed_url: str) -> None:
+    resp = httpx.get(f"{authed_url}/metrics", timeout=10.0)
+    assert resp.status_code == 200
+    assert "telethon" in resp.text

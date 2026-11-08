@@ -48,7 +48,7 @@ make clean        # remove the built images
 
 `make test-unit` runs [`tests/unit/`](https://github.com/psyb0t/docker-telethon-plus/tree/main/tests/unit) with a mocked `TelegramClient`: tools, throttling, the cache, config parsing, the proxy, `send_file` staging, and `/ws/updates` against the real app served by uvicorn on a local port. It needs no account and is what CI runs. It fails when coverage of `app/` drops below `COVERAGE_FLOOR` in the [Makefile](https://github.com/psyb0t/docker-telethon-plus/blob/main/Makefile) (93%); raise the floor as coverage grows, never lower it to get a build through. Two tests walk the whole tool registry, so a new tool must be added to the route table in `tests/unit/test_routes.py` and, if it changes anything, to `WRITE_TOOLS` in `tests/unit/test_tools_registry.py`, where it is checked for read-only and dry-run handling.
 
-`make test` runs the integration suite against a real account. It builds the image, starts it, and calls both REST and MCP: messages get sent and deleted.
+`make test` runs the integration suite against a real account. It builds the image and runs every tool through REST, and the main ones through MCP: messages, files sent and downloaded back byte for byte, polls, groups and channels, admin actions, live updates and the webhook, read-only and dry-run, and the entity cache across a restart.
 
 ```bash
 cp .env.example .env
@@ -56,7 +56,19 @@ $EDITOR .env  # TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION, TEST_CHAT
 make test
 ```
 
-`TEST_CHAT` is where test messages land; `me` (Saved Messages) keeps them private. Without credentials the suite skips. CI never runs it, because it would need an account.
+`TEST_CHAT` is where test messages land; `me` (Saved Messages) keeps them private. The suite writes only to `TEST_CHAT` and to groups and a channel it creates, named `telethon-plus-it-...` and deleted afterwards, including leftovers from an interrupted run. Only one container runs at a time, because two clients on one session make Telegram end it.
+
+Tests that need a chat outside the suite read it from [`tests/.env`](https://github.com/psyb0t/docker-telethon-plus/blob/main/tests/.env.example), and are skipped while their setting is empty:
+
+| Setting | Used for |
+| --- | --- |
+| `TEST_PUBLIC_CHANNEL` | A public channel to read and forward from. Default `@telegram`. |
+| `TEST_JOIN_CHAT` | A public chat the account is not in: joined, then left. |
+| `TEST_INVITE_LINK` | A `t.me/+...` invite to a chat the account is not in: joined, then left. |
+| `TEST_BOT_TOKEN` | A bot you own. It messages the account for the update and webhook tests, since what the server does itself raises no event. |
+| `TEST_PEER_USER` | A user or bot you control, for the admin tests. Defaults to the `TEST_BOT_TOKEN` bot. |
+
+Without credentials the suite skips. CI never runs it, because it would need an account.
 
 | Test file | Covers |
 | --- | --- |

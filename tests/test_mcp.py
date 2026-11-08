@@ -1,10 +1,12 @@
-"""MCP streamable HTTP surface — same tools, different door."""
+"""The MCP endpoint: the same tools as REST, over streamable HTTP."""
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
+from conftest import LocalServer
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -123,3 +125,33 @@ async def test_mcp_validation_error_surfaces(base_url: str) -> None:
                 {"chat": "me"},
             )
             assert call.isError
+
+
+@pytest.mark.asyncio
+async def test_mcp_send_file_and_download_it_back(
+    base_url: str, env: dict[str, str], local: LocalServer, media: dict[str, bytes]
+) -> None:
+    chat = env["TEST_CHAT"]
+    local.files["clip.mp4"] = media["clip.mp4"]
+
+    async with streamablehttp_client(_mcp_url(base_url)) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            sent = await session.call_tool(
+                "send_file", {"chat": chat, "file_url": local.file_url("clip.mp4"), "silent": True}
+            )
+            assert not sent.isError, sent.content
+            message_id = _extract_payload(sent)["id"]
+            try:
+                got = await session.call_tool(
+                    "download_media", {"chat": chat, "message_id": message_id}
+                )
+                assert not got.isError, got.content
+                payload = _extract_payload(got)
+                assert base64.b64decode(payload["data_base64"]) == media["clip.mp4"]
+                assert payload["mime_type"] == "video/mp4"
+                assert payload["filename"] == "clip.mp4"
+            finally:
+                await session.call_tool(
+                    "delete_messages", {"chat": chat, "message_ids": [message_id]}
+                )

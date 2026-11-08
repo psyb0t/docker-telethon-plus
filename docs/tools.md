@@ -23,7 +23,7 @@ Parameters are checked before anything reaches Telegram: an unknown field, a mis
 | Supergroup or channel ID | `-1001234567890` |
 | Your own Saved Messages | `me` |
 
-A numeric ID only resolves for a chat or user Telethon has already seen in this session: through a username or link lookup, the dialog list, or an incoming message. Telegram needs an access hash with the ID, and a bare number carries none. Resolve a bot or user by `@username` once, or list your dialogs, before using its numeric ID. Resolved references are kept in the [entity cache](throttling.md#entity-cache), which saves the lookup next time.
+A numeric ID resolves from the [entity cache](throttling.md#entity-cache) first, which keeps the access hash Telegram needs with every ID, then through Telethon, and finally by a search of the account's dialogs. So the ID of any chat the account is in works, also after a restart, and the bare IDs this API returns can be passed back as they are. A user or bot the account has no dialog with resolves by ID only after a lookup by `@username` or link.
 
 ## Account and lookups
 

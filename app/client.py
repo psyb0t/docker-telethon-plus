@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Optional
 
 from telethon import TelegramClient
+from telethon import utils as tl_utils
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 from telethon.tl.types import InputPeerChannel, InputPeerUser, PeerChat
@@ -35,6 +36,14 @@ TELETHON_SLEEP_BUCKET = "telethon_sleep"
 _CHANNEL_TYPES = ("Channel", "ChannelFull")
 _CHAT_TYPES = ("Chat", "ChatFull")
 _USER_TYPES = ("User", "UserFull")
+# The entity class names a marked id (-100<id> channel, -<id> basic group)
+# may belong to, by the peer type telethon.utils.resolve_id gives it.
+_TYPES_BY_MARKED_PEER = {
+    "PeerChannel": ("Channel", "ChannelForbidden"),
+    "PeerChat": ("Chat", "ChatForbidden"),
+}
+# Telegram's messages.getDialogs page size.
+DIALOGS_PAGE_SIZE = 100
 
 
 def _peer_from_cached(cached: Dict[str, Any]) -> Optional[Any]:
@@ -230,8 +239,8 @@ class TelethonHolder:
     async def resolve_entity(self, chat: str) -> Any:
         """Cache-aware entity resolution.
 
-        - Numeric chat refs use Telethon directly (no resolveUsername needed
-          once the entity is in the session DB).
+        - Numeric chat refs hit the cache, then Telethon, then the account's
+          dialogs; none of them costs a resolveUsername.
         - Username refs hit the cache; on miss we fall through to Telethon
           under the resolve_username bucket and store the result.
         """
@@ -239,8 +248,20 @@ class TelethonHolder:
         is_numeric = stripped.lstrip("-").isdigit()
 
         if is_numeric:
-            async with self.guard("other"):
-                entity = await self.client.get_entity(int(stripped))
+            entity = await self._resolve_from_cache(stripped)
+            if entity is not None:
+                return entity
+            try:
+                async with self.guard("other"):
+                    entity = await self.client.get_entity(int(stripped))
+            except ValueError:
+                # A fresh StringSession knows no access hashes, and Telethon
+                # reads a bare positive id as a user, so a chat id this API
+                # returned stopped resolving after a restart. The dialogs hold
+                # every chat the account is in, with its access hash.
+                entity = await self._find_in_dialogs(int(stripped))
+                if entity is None:
+                    raise
             self._cache.put(stripped, entity)
             return entity
 
@@ -254,6 +275,28 @@ class TelethonHolder:
             entity = await self.client.get_entity(stripped)
         self._cache.put(stripped, entity)
         return entity
+
+    async def _find_in_dialogs(self, chat_id: int) -> Optional[Any]:
+        """The entity of the account's dialog with this id, bare or marked, or
+        None when the account has no such dialog."""
+        bare_id, peer_type = tl_utils.resolve_id(chat_id)
+        # A bare id says nothing about the type: this API returns channel ids
+        # bare, and resolve_id calls every positive id a user.
+        kinds = _TYPES_BY_MARKED_PEER.get(peer_type.__name__) if chat_id < 0 else None
+        found: Optional[Any] = None
+        seen = 0
+        async with self.guard("read"):
+            async for dialog in self.client.iter_dialogs():
+                seen += 1
+                entity = dialog.entity
+                if getattr(entity, "id", None) != bare_id:
+                    continue
+                if kinds is None or type(entity).__name__ in kinds:
+                    found = entity
+                    break
+        # The guard paid for the first page only.
+        self._throttle.record_extra("read", max(0, (seen - 1) // DIALOGS_PAGE_SIZE))
+        return found
 
     async def _resolve_from_cache(self, key: str) -> Optional[Any]:
         """Entity for a cached handle, or None when the caller must resolve it

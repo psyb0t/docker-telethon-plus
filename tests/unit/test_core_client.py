@@ -108,6 +108,86 @@ async def test_a_record_without_an_access_hash_is_resolved_fresh(holder: Any) ->
     assert holder.cache.get("somechan")[ACCESS_HASH_FIELD] == ACCESS_HASH
 
 
+# ---------- numeric ids ------------------------------------------------------
+
+
+def _not_in_session(entity: Any) -> AsyncMock:
+    """get_entity as a fresh StringSession answers it: a peer with an access
+    hash resolves, a bare number does not."""
+
+    async def get_entity(ref: Any) -> Any:
+        if isinstance(ref, (InputPeerChannel, InputPeerUser)):
+            return entity
+        raise ValueError("Could not find the input entity for PeerUser")
+
+    return AsyncMock(side_effect=get_entity)
+
+
+def _dialogs(holder: Any, *entities: Any) -> None:
+    async def iter_dialogs(**_: Any) -> AsyncIterator[Any]:
+        for entity in entities:
+            yield SimpleNamespace(entity=entity)
+
+    holder._client.iter_dialogs = iter_dialogs
+
+
+async def test_a_numeric_id_is_served_from_the_cache_after_a_restart(holder: Any) -> None:
+    """Regression: numeric refs skipped the cache, so the bare chat ids this
+    API returns stopped resolving once the container restarted."""
+    entity = _entity(55, "Channel", "somechan")
+    holder.cache.put("55", entity)
+    holder._client.get_entity = _not_in_session(entity)
+
+    assert await holder.resolve_entity("55") is entity
+    (peer,) = holder._client.get_entity.await_args.args
+    assert isinstance(peer, InputPeerChannel)
+
+
+@pytest.mark.parametrize("ref", ["55", "-1000000000055"])
+async def test_a_numeric_id_telethon_cannot_place_is_found_in_the_dialogs(
+    holder: Any, ref: str
+) -> None:
+    wanted = _entity(55, "Channel", "somechan")
+    _dialogs(holder, _entity(7, "User", "someone"), wanted)
+    holder._client.get_entity = _not_in_session(wanted)
+
+    assert await holder.resolve_entity(ref) is wanted
+    # Cached, so the next lookup needs no scan.
+    assert holder.cache.get(ref)[ACCESS_HASH_FIELD] == ACCESS_HASH
+
+
+async def test_a_marked_channel_id_does_not_match_a_user_with_the_same_number(
+    holder: Any,
+) -> None:
+    _dialogs(holder, _entity(55, "User", "someone"))
+    holder._client.get_entity = AsyncMock(side_effect=ValueError("Could not find"))
+
+    with pytest.raises(ValueError):
+        await holder.resolve_entity("-1000000000055")
+
+
+async def test_a_numeric_id_in_no_dialog_still_raises(holder: Any) -> None:
+    _dialogs(holder, _entity(7, "User", "someone"))
+    holder._client.get_entity = AsyncMock(side_effect=ValueError("Could not find"))
+
+    with pytest.raises(ValueError, match="Could not find"):
+        await holder.resolve_entity("55")
+    assert holder.cache.get("55") is None
+
+
+async def test_a_created_group_is_cached_by_its_id(holder: Any) -> None:
+    from app.tools import REGISTRY
+
+    created = _entity(55, "Channel", "")
+    holder._client.return_value = SimpleNamespace(chats=[created])
+    tool = REGISTRY["create_group"]
+
+    answer = await tool.handler(holder, tool.params_model(title="a group"))
+
+    assert answer["id"] == 55
+    assert holder.cache.get("55")[ACCESS_HASH_FIELD] == ACCESS_HASH
+
+
 # ---------- cache hits: which errors fall back -------------------------------
 
 

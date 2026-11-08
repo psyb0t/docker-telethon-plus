@@ -107,9 +107,14 @@ def make_wire(handler: Callable[[Any], Any] | None = None) -> Wire:
 
 
 def entity_table(entities: Dict[str, Any]) -> Callable[[Any], Any]:
-    """A `get_entity` side effect that answers by the chat reference."""
+    """A `get_entity` side effect that answers by the chat reference, or, for
+    the InputPeer a cache hit sends, by the entity id in it."""
 
     async def get_entity(reference: Any) -> Any:
+        for id_attr in ("channel_id", "user_id", "chat_id"):
+            peer_id = getattr(reference, id_attr, None)
+            if peer_id is not None:
+                return next(e for e in entities.values() if e.id == peer_id)
         return entities[str(reference)]
 
     return get_entity

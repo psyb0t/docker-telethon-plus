@@ -6,7 +6,7 @@ nav_order: 7
 
 # Updates and webhooks
 
-telethon-plus listens for four kinds of incoming events on the account and hands each one to every subscriber: `NewMessage`, `MessageEdited`, `MessageDeleted` and `ChatAction` (joins, leaves, title changes and the like). There are two ways to receive them, and both can run at once: the websocket, on by default, and a webhook, on when `TELETHON_POST_TO_URL` is set. `TELETHON_UPDATES_ENABLED=false` turns event listening off, which removes `/ws/updates` and stops the webhook.
+telethon-plus listens for four kinds of incoming events on the account and hands each one to every subscriber: `NewMessage`, `MessageEdited`, `MessageDeleted` and `ChatAction` (joins, leaves, title changes and the like). What telethon-plus does itself raises no event: a message it sends, edits or deletes is not echoed back, because Telethon applies the answers to its own requests without dispatching them. Messages from other people, and from your other Telegram apps (with `"out": true`), do arrive. There are two ways to receive them, and both can run at once: the websocket, on by default, and a webhook, on when `TELETHON_POST_TO_URL` is set. `TELETHON_UPDATES_ENABLED=false` turns event listening off, which removes `/ws/updates` and stops the webhook.
 
 ## WebSocket: /ws/updates
 

@@ -2,6 +2,19 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.2, 2026-11-08
+
+### Fixed
+
+- **A numeric chat ID stopped working after a restart.** The IDs the API returns, such as the `id` of a group from `create_group`, resolved only while Telethon still remembered the chat in memory. After a restart a bare channel ID was read as a user and failed with `Could not find the input entity`: numeric IDs never consulted the entity cache, and `create_group` did not cache the chat it made. They now resolve from the cache, then through Telethon, then by a search of the account's dialogs, and `create_group` caches the chat it creates. See [docs/tools.md](https://psyb0t.github.io/docker-telethon-plus/tools/#chat-references).
+- **`get_poll_results` showed old counts right after a vote.** It read the counts stored with the poll message, which Telegram updates seconds later, so a vote just made could read as 0 voters. It now asks Telegram for the current results, which costs one more `read` slot.
+- **MCP refusals looked like successful calls.** A `read_only`, `flood_wait`, `telegram_rpc` or `invalid_argument` answer came back as a plain result, so an agent took the call as done. It now comes back as an error result (`isError: true`) with the same JSON text. See [docs/mcp.md](https://psyb0t.github.io/docker-telethon-plus/mcp/#tool-results-and-errors).
+
+### Changed
+
+- **The documentation says that the server's own actions raise no event.** A message telethon-plus sends, edits or deletes is not echoed on `/ws/updates` or the webhook. See [docs/updates.md](https://psyb0t.github.io/docker-telethon-plus/updates/).
+- **`make test` covers every tool on the real account,** with optional settings in `tests/.env` for chats outside the suite. See [docs/development.md](https://psyb0t.github.io/docker-telethon-plus/development/).
+
 ## v0.7.1, 2026-11-07
 
 The first published release with the v0.7.0 changes below. v0.7.0 was tagged, but its CI run failed, so no `v0.7.0` image, GitHub release or registry entry exists.

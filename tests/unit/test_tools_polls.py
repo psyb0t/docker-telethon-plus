@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 from telethon.extensions import BinaryReader
+from telethon.tl.functions.messages import GetPollResultsRequest
 from telethon.tl.types import (
     Message,
     MessageMediaPoll,
@@ -19,6 +20,8 @@ from telethon.tl.types import (
     PollAnswerVoters,
     PollResults,
     TextWithEntities,
+    UpdateMessagePoll,
+    Updates,
 )
 
 from .test_tools_support import (
@@ -246,17 +249,23 @@ async def test_get_poll_results_before_any_vote_lists_no_results(holder, make_en
     assert result["total_voters"] is None
 
 
-async def test_get_poll_results_costs_one_read_slot_and_one_request(holder, make_entity) -> None:
-    """Regression: an unused GetMessagesReactions call was made on top."""
+async def test_get_poll_results_costs_two_read_slots_for_its_two_requests(
+    holder, make_entity
+) -> None:
+    """The poll message, then its current counts. Regression: an unused
+    GetMessagesReactions call was once made on top."""
     holder._client.get_entity = AsyncMock(return_value=make_entity(1))
     holder._client.get_messages = AsyncMock(return_value=[_poll_message(TOKENS, _results())])
+    holder._client.return_value = Updates(updates=[], users=[], chats=[], date=None, seq=0)
     used_before = holder.throttle.snapshot()["buckets"]["read"]["used"]
 
     await _tool("get_poll_results").handler(holder, _params("get_poll_results", message_id=9))
 
     used_after = holder.throttle.snapshot()["buckets"]["read"]["used"]
-    assert used_after - used_before == 1
-    holder._client.assert_not_awaited()
+    assert used_after - used_before == 2
+    (request,) = holder._client.await_args.args
+    assert isinstance(request, GetPollResultsRequest)
+    assert holder._client.await_count == 1
 
 
 async def test_get_poll_results_of_a_message_without_a_poll_is_rejected(
@@ -330,3 +339,42 @@ async def test_vote_poll_on_a_missing_message_is_rejected(holder, make_entity) -
 
     with pytest.raises(ValueError, match="no poll"):
         await _tool("vote_poll").handler(holder, _params("vote_poll", message_id=9, options=[0]))
+
+
+async def test_get_poll_results_asks_telegram_for_the_current_counts(holder, make_entity) -> None:
+    """Regression: the counts came from the poll message, which lags a vote,
+    so a vote just made read as 0 voters."""
+    stale = PollResults(total_voters=0, results=[])
+    holder._client.get_entity = AsyncMock(return_value=make_entity(1))
+    holder._client.get_messages = AsyncMock(return_value=[_poll_message(TOKENS, stale)])
+    holder._client.return_value = Updates(
+        updates=[UpdateMessagePoll(poll_id=1, results=_results())],
+        users=[],
+        chats=[],
+        date=None,
+        seq=0,
+    )
+
+    result = await _tool("get_poll_results").handler(
+        holder, _params("get_poll_results", message_id=9)
+    )
+
+    (request,) = holder._client.await_args.args
+    assert isinstance(request, GetPollResultsRequest)
+    assert request.msg_id == 9
+    assert result["total_voters"] == 7
+    assert [r["option_index"] for r in result["results"]] == [2, 0]
+
+
+async def test_get_poll_results_falls_back_to_the_message_without_fresh_counts(
+    holder, make_entity
+) -> None:
+    holder._client.get_entity = AsyncMock(return_value=make_entity(1))
+    holder._client.get_messages = AsyncMock(return_value=[_poll_message(TOKENS, _results())])
+    holder._client.return_value = Updates(updates=[], users=[], chats=[], date=None, seq=0)
+
+    result = await _tool("get_poll_results").handler(
+        holder, _params("get_poll_results", message_id=9)
+    )
+
+    assert result["total_voters"] == 7

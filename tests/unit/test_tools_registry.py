@@ -10,6 +10,7 @@ tool added later is covered without anyone remembering to:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -178,6 +179,9 @@ def _prepare_reads(client: Any, name: str) -> None:
     if name in ("vote_poll", "get_poll_results"):
         # get_messages(ids=[...]) returns a list.
         client.get_messages = AsyncMock(return_value=[_poll_message()])
+    if name == "create_group":
+        # The created chat is cached, so it has to be a real entity.
+        client.return_value = SimpleNamespace(chats=[_channel()])
 
 
 @pytest.mark.parametrize(

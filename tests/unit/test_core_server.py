@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import CallToolResult
 from starlette.websockets import WebSocketDisconnect
 from telethon.errors import ChatAdminRequiredError, FloodWaitError
 
@@ -280,7 +281,12 @@ def test_rest_counts_every_tool_error_and_maps_it(
 
 
 def _mcp_answer(result: Any) -> Dict[str, Any]:
-    (content,) = result
+    """The JSON of an MCP refusal, which must be flagged as an error.
+    Regression: refusals came back as plain results, which told the agent
+    the call had worked."""
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    (content,) = result.content
     answer: Dict[str, Any] = json.loads(content.text)
     return answer
 

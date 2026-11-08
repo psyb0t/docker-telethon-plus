@@ -49,6 +49,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ValidationError
 from telethon.errors import FloodWaitError, RPCError
 
@@ -270,7 +271,11 @@ def _mount_mcp_tool(mcp: FastMCP, holder: TelethonHolder, tool: Tool) -> None:
             answer = _mcp_error(exc)
             if answer is None:
                 raise
-            return answer
+            # Returned as an error result, not a plain one: a plain result
+            # told the agent the call had worked. The text is the same JSON.
+            return CallToolResult(
+                content=[TextContent(type="text", text=json.dumps(answer))], isError=True
+            )
 
     _call.__name__ = tool.name
     _call.__doc__ = tool.description

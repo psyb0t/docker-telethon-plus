@@ -444,7 +444,7 @@ curl -s $TELETHON_PLUS_URL/mcp/ \
   }'
 ```
 
-MCP tool errors come back inside the result (not as HTTP status): read-only → `{"error":"read_only",...}`, long `FLOOD_WAIT` → `{"error":"flood_wait","seconds":N,...}` (wait that long), other Telegram RPC → `{"error":"telegram_rpc","type":...}`, bad args → `{"error":"invalid_argument",...}`.
+MCP tool errors come back as an error result (`isError: true`) whose text is JSON, not as an HTTP status: read-only → `{"error":"read_only",...}`, long `FLOOD_WAIT` → `{"error":"flood_wait","seconds":N,...}` (wait that long), other Telegram RPC → `{"error":"telegram_rpc","type":...}`, bad args → `{"error":"invalid_argument",...}`.
 
 ## Bearer-Token Auth
 

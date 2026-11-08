@@ -20,7 +20,7 @@ An agent can do anything the account can, including sending, deleting and leavin
 
 ## Tool results and errors
 
-A tool returns the same JSON its REST route returns. A failure comes back as a normal result with an `error` field instead of an HTTP status:
+A tool returns the same JSON its REST route returns. A failure comes back as an error result (`isError: true`) whose text is a JSON object with an `error` field, in place of the HTTP status:
 
 | `error` | When | Other fields |
 | --- | --- | --- |

@@ -40,6 +40,7 @@ from telethon.tl.functions.channels import (
 )
 from telethon.tl.functions.messages import (
     DeleteChatUserRequest,
+    GetPollResultsRequest,
     ImportChatInviteRequest,
     SendReactionRequest,
     SendVoteRequest,
@@ -57,6 +58,7 @@ from telethon.tl.types import (
     Poll,
     ReactionEmoji,
     TextWithEntities,
+    UpdateMessagePoll,
     User,
 )
 
@@ -71,6 +73,8 @@ _MAX_POLL_OPTION_LENGTH = 100
 # A poll that does not exist yet has no server-assigned id or hash.
 _NEW_POLL_ID = 0
 _NEW_POLL_HASH = 0
+# messages.getPollResults hash for "send the results whatever I have".
+_NO_POLL_RESULTS_HASH = 0
 
 # Telethon's participants iterator asks for 200 users per request
 # (_MAX_PARTICIPANTS_CHUNK_SIZE in telethon/client/chats.py).
@@ -845,7 +849,11 @@ async def _create_group(holder: TelethonHolder, params: CreateGroupParams) -> Di
                 megagroup=params.megagroup,
             )
         )
-    return _entity_to_dict(result.chats[0])
+    chat = result.chats[0]
+    # Cached by the id the answer reports, so that id still resolves after a
+    # restart without a scan of the dialogs.
+    holder.cache.put(str(chat.id), chat)
+    return _entity_to_dict(chat)
 
 
 _register(
@@ -1713,12 +1721,21 @@ async def _get_poll_results(holder: TelethonHolder, params: GetPollResultsParams
     if not msgs or msgs[0] is None or msgs[0].poll is None:
         raise ValueError("message has no poll")
     media = msgs[0].poll
+    # The counts in the message can lag a vote by seconds; getPollResults
+    # asks Telegram for the current ones.
+    async with holder.guard("read") as client:
+        fresh = await client(
+            GetPollResultsRequest(
+                peer=entity, msg_id=params.message_id, poll_hash=_NO_POLL_RESULTS_HASH
+            )
+        )
+    results = _fresh_poll_results(fresh) or media.results
     # Results name an answer by its opaque token; report the index callers
     # pass to vote_poll instead.
     index_by_token = {answer.option: index for index, answer in enumerate(media.poll.answers)}
     return {
         "question": media.poll.question.text,
-        "total_voters": media.results.total_voters,
+        "total_voters": results.total_voters,
         "results": [
             {
                 "option_index": index_by_token.get(r.option),
@@ -1726,9 +1743,18 @@ async def _get_poll_results(holder: TelethonHolder, params: GetPollResultsParams
                 "correct": r.correct,
                 "chosen": r.chosen,
             }
-            for r in media.results.results or []
+            for r in results.results or []
         ],
     }
+
+
+def _fresh_poll_results(updates: Any) -> Any:
+    """The results in the UpdateMessagePoll getPollResults answers with, or
+    None when the answer carries none."""
+    for update in getattr(updates, "updates", None) or []:
+        if isinstance(update, UpdateMessagePoll):
+            return update.results
+    return None
 
 
 _register(
