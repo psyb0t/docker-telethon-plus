@@ -42,3 +42,6 @@ git-update.sh.debot
 sec.sarif
 .coverage
 coverage.xml
+
+# Local agent and editor settings.
+*.local.json
