@@ -17,6 +17,7 @@ One login. One session string. Never type a code again.
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
 - [Agent integrations](#agent-integrations)
+- [Sponsor](#sponsor)
 - [License](#license)
 
 ## Documentation
@@ -130,6 +131,10 @@ openclaw plugins install clawhub:@psyb0t/telethon-plus
 ```
 
 Then set `TELETHON_PLUS_URL` (and `TELETHON_AUTH_KEY` if the server requires auth).
+
+## Sponsor
+
+<a href="https://www.buymeacoffee.com/psyb0t"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" height="60" width="217"></a>
 
 ## License
 

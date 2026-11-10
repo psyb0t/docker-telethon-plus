@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# telethon.sh — thin curl wrapper over a running docker-telethon-plus instance.
+# telethon.sh: thin curl wrapper over a running docker-telethon-plus instance.
 #
 # Drives the JSON HTTP API for the common read/send/delete operations so you
 # don't hand-assemble the bearer header + JSON body every time. Talks to a
-# REAL Telegram user account — only point it at an instance you own and only
+# REAL Telegram user account. Only point it at an instance you own and only
 # for actions that account is authorized to take.
 #
 # Env:

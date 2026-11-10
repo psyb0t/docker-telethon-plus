@@ -2,6 +2,15 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.4, 2026-11-10
+
+### Changed
+
+- **The documentation lives at [psyb0t.github.io/docker-telethon-plus](https://psyb0t.github.io/docker-telethon-plus/),** now titled docker-telethon-plus, and the README keeps the quick start and links there for the reference material. [docs/development.md](https://psyb0t.github.io/docker-telethon-plus/development/) describes the current pipeline.
+- **The skill's setup reference describes the throttle settings correctly.** `TELETHON_THROTTLE_JITTER_MS` adds 0 up to that many milliseconds, `TELETHON_BUCKET_GET_FULL_PER_MIN` covers linked-chat lookups and `get_participants`, and `TELETHON_LOG_LEVEL` also takes `CRITICAL`.
+- **Lint, the unit tests and the security scan run on every branch push.** Pull requests no longer start their own runs, and only `main` builds and pushes the image.
+- **The funding links include Buy Me a Coffee,** and `AGENTS.md` plus the project rules in `.agents/rules/` for coding agents are committed.
+
 ## v0.7.3, 2026-11-08
 
 ### Security

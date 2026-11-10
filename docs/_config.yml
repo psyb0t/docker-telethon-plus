@@ -1,4 +1,4 @@
-title: telethon-plus
+title: docker-telethon-plus
 tagline: Your Telegram account over HTTP and MCP
 description: Telethon, the MTProto userbot client, behind a JSON HTTP API and an MCP endpoint, with flood protection, an entity cache and live updates.
 lang: en

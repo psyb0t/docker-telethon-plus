@@ -4,7 +4,7 @@
 // (`$TELETHON_PLUS_URL/mcp/`), authenticating with `$TELETHON_AUTH_KEY` when
 // the server requires it.
 //
-// stdout IS the MCP protocol channel, so diagnostics go to stderr only — the
+// stdout IS the MCP protocol channel, so diagnostics go to stderr only. The
 // sole output here is a fatal pre-launch console.error (user-facing CLI
 // output). The token is passed to the proxy as an argv header, never logged.
 import { spawnSync } from "node:child_process";
@@ -23,7 +23,7 @@ if (!base) {
 Point this bridge at your running docker-telethon-plus server, e.g.:
   export TELETHON_PLUS_URL=http://localhost:8080
 
-docker-telethon-plus is self-hosted — see https://github.com/psyb0t/docker-telethon-plus`,
+docker-telethon-plus is self-hosted. See https://github.com/psyb0t/docker-telethon-plus`,
   );
   process.exit(1);
 }

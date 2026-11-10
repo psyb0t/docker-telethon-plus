@@ -7,7 +7,7 @@ seo:
   type: WebSite
 ---
 
-# telethon-plus
+# docker-telethon-plus
 
 Your Telegram account, but it takes HTTP requests. telethon-plus wraps [Telethon](https://codeberg.org/Lonami/Telethon), the real MTProto user client and not the Bot API, behind a JSON HTTP API and a [Model Context Protocol](https://modelcontextprotocol.io) endpoint, in one Docker image.
 

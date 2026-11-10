@@ -28,10 +28,8 @@ build/
 dist/
 
 # research / scratch
-AGENTS.md
 .testing/
 .research_files/
-CLAUDE.md
 git-update.sh
 
 # Review receipt for the local release script.

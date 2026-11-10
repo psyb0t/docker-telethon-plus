@@ -1,18 +1,18 @@
 # telethon-plus setup
 
-Operator-side reference — installing, logging in, and configuring the container. The agent skill itself is **consumer-only**: it talks to an already-running, already-logged-in instance and never provisions or authenticates an account.
+Operator-side reference: installing, logging in, and configuring the container. The agent skill itself is **consumer-only**: it talks to an already-running, already-logged-in instance and never provisions or authenticates an account.
 
 ## Deployment guidance (read before exposing this anywhere)
 
 - **Bind to localhost, or put TLS in front of it.** Don't expose `TELETHON_HTTP_LISTEN_ADDRESS` on `0.0.0.0` to an untrusted network without a reverse proxy terminating TLS (see "Public Access via Reverse Proxy" below).
 - **Set `TELETHON_AUTH_KEY`.** Unset/empty = every route except `/healthz` and `/metrics` is wide open to anyone who can reach the port.
-- **Never expose `/mcp/` or `/api/` to untrusted agents or networks.** Both surfaces grant full read/write/admin control of a real Telegram account — treat them like you'd treat exposing a database or a cloud credential, not like a public API.
+- **Never expose `/mcp/` or `/api/` to untrusted agents or networks.** Both surfaces grant full read/write/admin control of a real Telegram account. Treat them like you'd treat exposing a database or a cloud credential, not like a public API.
 
 ## Requirements
 
 - Docker.
 - A Telegram **API ID** and **API HASH** from <https://my.telegram.org/apps> (one-time, per Telegram account).
-- A **string session** minted once via the interactive login flow (`make login`). This proves the human once — phone number, SMS code, optionally 2FA — then never again.
+- A **string session** minted once via the interactive login flow (`make login`). This proves the human once (phone number, SMS code, optionally 2FA), then never again.
 - Outbound network to Telegram's MTProto servers.
 
 > **The session string is full account access.** Whoever holds it *is* the account. Never commit it, paste it in chat, or bake it into an image. `.env` is gitignored for this reason.
@@ -93,14 +93,14 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 
 | Var | Default | Notes |
 |---|---|---|
-| `TELETHON_AUTH_KEY` | `""` (no auth) | When set, `Authorization: Bearer <key>` required on every route except `/healthz` and `/metrics`; WS takes it as `?token=`. Empty = wide open — every route including `/mcp/` and `/api/` is reachable by anyone who can reach the port. Set this before exposing the container beyond a fully trusted, private network. |
+| `TELETHON_AUTH_KEY` | `""` (no auth) | When set, `Authorization: Bearer <key>` required on every route except `/healthz` and `/metrics`; WS takes it as `?token=`. Empty = wide open: every route including `/mcp/` and `/api/` is reachable by anyone who can reach the port. Set this before exposing the container beyond a fully trusted, private network. |
 | `TELETHON_HTTP_LISTEN_ADDRESS` | `0.0.0.0:8080` | `host:port` to bind inside the container. |
 
 ### Client identity + behavior
 
 | Var | Default | Notes |
 |---|---|---|
-| `TELETHON_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `TELETHON_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` |
 | `TELETHON_LOG_JSON` | `false` | JSON-structured logs |
 | `TELETHON_REQUEST_TIMEOUT` | `60` | Per-request timeout (seconds) |
 | `TELETHON_FLOOD_SLEEP_THRESHOLD` | `60` | Auto-sleep through `FLOOD_WAIT` errors up to this many seconds; a longer one answers 429 |
@@ -118,18 +118,18 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 | `TELETHON_READ_ONLY` | `false` | `true` → every write endpoint returns `403`; reads/status/metrics still work. Panic killswitch, or to keep a test deployment harmless. |
 | `TELETHON_DRY_RUN` | `false` | `true` → writes are validated but not sent to Telegram; response echoes `{"dry_run": true, "would_...": {...}}`. |
 
-### Throttling & entity cache (anti-flood — defaults are conservative)
+### Throttling & entity cache (anti-flood, defaults are conservative)
 
 | Var | Default | Notes |
 |---|---|---|
 | `TELETHON_THROTTLE_ENABLED` | `true` | Master switch for all rate-limiting below |
 | `TELETHON_THROTTLE_GLOBAL_INTERVAL_MS` | `50` | Min gap between any two outgoing requests |
-| `TELETHON_THROTTLE_JITTER_MS` | `200` | Random ±jitter on top (breaks metronome patterns) |
+| `TELETHON_THROTTLE_JITTER_MS` | `200` | Random jitter of 0 up to this many ms on top (breaks metronome patterns) |
 | `TELETHON_THROTTLE_PER_CHAT_INTERVAL_MS` | `1100` | Min gap between sends to the same chat |
 | `TELETHON_THROTTLE_PER_CHAT_READ_INTERVAL_MS` | `250` | Min gap between reads from the same chat |
 | `TELETHON_THROTTLE_ADAPTIVE` | `true` | Each `FLOOD_WAIT` in the last hour doubles the global and per-chat gaps (up to 64x); each one stops counting an hour after it happened |
-| `TELETHON_BUCKET_RESOLVE_PER_MIN` | `5` | Cap on `resolveUsername` — the main thing that gets accounts banned |
-| `TELETHON_BUCKET_GET_FULL_PER_MIN` | `10` | Cap on `getFullChannel` / `getFullUser` / `get_participants` |
+| `TELETHON_BUCKET_RESOLVE_PER_MIN` | `5` | Cap on `resolveUsername`, the main thing that gets accounts banned |
+| `TELETHON_BUCKET_GET_FULL_PER_MIN` | `10` | Cap on `getFullChannel` (linked-chat lookups) / `get_participants` |
 | `TELETHON_BUCKET_JOIN_PER_HOUR` | `5` | Cap on channel/group joins |
 | `TELETHON_BUCKET_CREATE_PER_HOUR` | `5` | Cap on channel/group creation |
 | `TELETHON_BUCKET_SEND_PER_MIN` | `20` | Cap on sends across all chats |
@@ -144,19 +144,19 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 |---|---|---|
 | `TELETHON_UPDATES_ENABLED` | `true` | Register incoming-event handlers and expose `/ws/updates` |
 | `TELETHON_UPDATES_BUFFER_SIZE` | `256` | Per-subscriber WS queue depth; a client that falls this far behind is closed with code 1013 and must reconnect and catch up with `GET /api/messages` |
-| `TELETHON_POST_TO_URL` | `""` | Outbound webhook — every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. **Data exfiltration warning:** once set, EVERY incoming message's content, sender metadata, and account activity is forwarded to this URL, indefinitely, for as long as the container runs. Use only a trusted HTTPS endpoint you control — never a third party's URL. |
+| `TELETHON_POST_TO_URL` | `""` | Outbound webhook: every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. **Data exfiltration warning:** once set, EVERY incoming message's content, sender metadata, and account activity is forwarded to this URL, indefinitely, for as long as the container runs. Use only a trusted HTTPS endpoint you control, never a third party's URL. |
 | `TELETHON_POST_TO_TIMEOUT` | `10` | Webhook POST timeout (seconds) |
 
 ## Ports
 
 | Port | Service |
 |---|---|
-| 8080 | HTTP API + MCP (`/mcp/`) + WebSocket (`/ws/updates`) — one port |
+| 8080 | HTTP API + MCP (`/mcp/`) + WebSocket (`/ws/updates`), one port |
 
 The container binds `0.0.0.0:8080` by default (override with `TELETHON_HTTP_LISTEN_ADDRESS`). Control host exposure with `-p` at `docker run` time:
 
-- `-p 127.0.0.1:8080:8080` — loopback-only on the host.
-- `-p 8080:8080` — all host interfaces.
+- `-p 127.0.0.1:8080:8080`: loopback-only on the host.
+- `-p 8080:8080`: all host interfaces.
 
 ## Management
 
@@ -170,7 +170,7 @@ curl -s http://localhost:8080/healthz | jq              # liveness + authorized 
 curl -s http://localhost:8080/api/throttle/status | jq  # live rate-limit + cache state
 ```
 
-If the container isn't responding on `/healthz`, the session is likely dead — an unauthorized `TELETHON_SESSION` makes the process exit at startup rather than serve a degraded `authorized: false`. Check `docker logs`, then re-run the login flow and update `TELETHON_SESSION`.
+If the container isn't responding on `/healthz`, the session is likely dead: an unauthorized `TELETHON_SESSION` makes the process exit at startup rather than serve a degraded `authorized: false`. Check `docker logs`, then re-run the login flow and update `TELETHON_SESSION`.
 
 ## Public Access via Reverse Proxy (optional)
 

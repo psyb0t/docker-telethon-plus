@@ -4,18 +4,18 @@ An OpenClaw/MCP plugin that connects your agent to a self-hosted
 [docker-telethon-plus](https://github.com/psyb0t/docker-telethon-plus)
 Telegram userbot API over the [Model Context Protocol](https://modelcontextprotocol.io).
 
-docker-telethon-plus wraps [Telethon](https://codeberg.org/Lonami/Telethon) —
-a real MTProto **userbot** client, a full Telegram user account, not the Bot
-API — and already serves a Streamable-HTTP MCP endpoint at `/mcp/`. This
+docker-telethon-plus wraps [Telethon](https://codeberg.org/Lonami/Telethon)
+(a real MTProto **userbot** client, a full Telegram user account, not the Bot
+API) and already serves a Streamable-HTTP MCP endpoint at `/mcp/`. This
 package is a thin stdio↔HTTP bridge (via
 [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)) for MCP clients that
-speak local stdio servers — it forwards everything to your running instance
+speak local stdio servers. It forwards everything to your running instance
 and authenticates with your bearer token when the server requires one.
 
 > docker-telethon-plus is **self-hosted** and drives a **real Telegram user
-> account** — full read/write access to every DM, group, and channel that
+> account**, with full read/write access to every DM, group, and channel that
 > account can reach. This plugin does not ship the Telegram client or
-> provision/log in an account — it connects to a server that **you** run and
+> provision/log in an account. It connects to a server that **you** run and
 > that is already authorized. See the
 > [docker-telethon-plus repo](https://github.com/psyb0t/docker-telethon-plus)
 > to stand one up.
@@ -38,7 +38,7 @@ messages (`send_message`, `send_file`, `get_messages`, `get_message`,
 | Env var | Required | Description |
 |---|---|---|
 | `TELETHON_PLUS_URL` | yes | Base URL of your running docker-telethon-plus server, e.g. `http://localhost:8080`. The bridge appends `/mcp/`. |
-| `TELETHON_AUTH_KEY` | no | Bearer token — only if the docker-telethon-plus server was started with `TELETHON_AUTH_KEY` set. |
+| `TELETHON_AUTH_KEY` | no | Bearer token, only if the docker-telethon-plus server was started with `TELETHON_AUTH_KEY` set. |
 
 ## Install
 
@@ -54,7 +54,7 @@ auth) in the plugin's environment.
 ## Native remote MCP (no install)
 
 If your MCP client already supports **remote** Streamable-HTTP servers, you
-don't need this bridge — point the client straight at
+don't need this bridge. Point the client straight at
 `$TELETHON_PLUS_URL/mcp/` with an `Authorization: Bearer <token>` header.
 
 ## License

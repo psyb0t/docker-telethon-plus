@@ -36,7 +36,7 @@ make test-unit    # unit tests with coverage, no Docker or Telegram needed
 make test         # integration tests against a real Telegram account
 make sec          # semgrep + bandit + pip-audit into sec.sarif (reports, never fails)
 make audit        # pip-audit on the locked runtime dependencies (fails on a finding)
-make docs        # build this site locally into .testing/docs-site
+make docs         # build this site locally into .testing/docs-site
 make dev-image    # rebuild the dev image
 make shell        # a shell in the dev image
 make clean        # remove the built images
@@ -93,11 +93,12 @@ Each of these moves `exclude-newer` to seven days ago first. Rebuild with `make 
 
 ## CI and releases
 
-[`.github/workflows/pipeline.yml`](https://github.com/psyb0t/docker-telethon-plus/blob/main/.github/workflows/pipeline.yml) runs on pushes to `main`, on `v*` tags and on non-draft pull requests:
+[`.github/workflows/pipeline.yml`](https://github.com/psyb0t/docker-telethon-plus/blob/main/.github/workflows/pipeline.yml) runs on every push, to any branch or tag:
 
-1. `code` runs `make lint`, `make test-unit` and `make sec`, and uploads `sec.sarif` to the Security tab.
-2. `docker` builds the image for `linux/amd64` and `linux/arm64` once `code` passes. On `main` it pushes `latest` and `sha-<commit>` and syncs the README to Docker Hub. A pull request builds without pushing.
-3. A tag never rebuilds. `wait` waits for the `main` run of the tagged commit to pass, `docker-promote` re-tags that `sha-<commit>` image as the version, `release` writes the GitHub release from the annotated tag's notes, and the skill and plugin go to ClawHub and the MCP registry.
+1. `code` runs `make lint`, `make test-unit` and `make sec` on every branch push, and uploads `sec.sarif` to the Security tab. All three run in the dev image, so the runner needs nothing but Docker and make.
+2. `docker` builds the image for `linux/amd64` and `linux/arm64` once `code` passes, on `main` only. It pushes `latest` and `sha-<commit>` and syncs the README to Docker Hub. Other branches stop after `code`.
+3. A tag never rebuilds. `wait` waits for the `main` run of the tagged commit to pass, `docker-promote` re-tags that `sha-<commit>` image as the version, `release` writes the GitHub release from the annotated tag's notes, and the skill and plugin go to ClawHub and the server to the MCP Registry.
+4. `badges` refreshes the version and license badges after a passing `main` run or a released tag.
 
 So push to `main`, let the run pass, then tag that commit. The Docker Hub sync fails when `README.md` is over Docker Hub's 25,000-byte limit; move detail from the README into `docs/` rather than trimming the sync.
 

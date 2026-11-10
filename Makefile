@@ -124,7 +124,7 @@ audit: dev-image ## Check the locked runtime dependencies for advisories (fails 
 
 # The GitHub Pages build of docs/, with the image GitHub itself uses, into a
 # gitignored directory. Pages serves it under /docker-telethon-plus/.
-DOCS_BUILD_IMAGE := ghcr.io/actions/jekyll-build-pages:v1.0.13
+DOCS_BUILD_IMAGE := ghcr.io/actions/jekyll-build-pages:v1.0.13@sha256:6791ebfd912185ed59bfb5fb102664fa872496b79f87ff8b9cfba292a7345041
 DOCS_OUT := .testing/docs-site
 
 docs: ## Build the documentation site locally into .testing/docs-site

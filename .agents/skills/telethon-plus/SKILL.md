@@ -1,48 +1,48 @@
 ---
 name: telethon-plus
-description: HTTP + MCP control plane over a REAL Telegram MTProto userbot (Telethon) — a full user account, not the Bot API. Send/read/edit/delete/forward messages, browse dialogs, resolve entities/contacts, download + send media, manage chats (create/join/leave/admin), run polls, and forward every incoming message to a webhook (TELETHON_POST_TO_URL). JSON in / JSON out on one port; MCP streamable-HTTP at /mcp/ mirrors the same tools; optional bearer auth. Built-in anti-flood throttling keeps the account under Telegram's limits. Use when the user wants an agent, script, or curl one-liner to drive their own Telegram account over HTTP/MCP — read a chat, DM someone, post to a channel, react/pin, or pipe incoming DMs into an app. Drives a real account acting AS the user with full account access.
+description: HTTP + MCP control plane over a REAL Telegram MTProto userbot (Telethon), a full user account, not the Bot API. Send/read/edit/delete/forward messages, browse dialogs, resolve entities/contacts, download + send media, manage chats (create/join/leave/admin), run polls, and forward every incoming message to a webhook (TELETHON_POST_TO_URL). JSON in / JSON out on one port; MCP streamable-HTTP at /mcp/ mirrors the same tools; optional bearer auth. Built-in anti-flood throttling keeps the account under Telegram's limits. Use when the user wants an agent, script, or curl one-liner to drive their own Telegram account over HTTP/MCP (read a chat, DM someone, post to a channel, react/pin, or pipe incoming DMs into an app). Drives a real account acting AS the user with full account access.
 homepage: https://github.com/psyb0t/docker-telethon-plus
 user-invocable: true
 metadata:
   { "openclaw": { "emoji": "✈️", "primaryEnv": "TELETHON_PLUS_URL", "requires": { "bins": ["docker", "curl"] } } }
 permissions:
-  shell: "setup-only — docker/curl for install, login, and container management (see references/setup.md); runtime API calls are plain HTTP, not shell"
+  shell: "setup-only: docker/curl for install, login, and container management (see references/setup.md); runtime API calls are plain HTTP, not shell"
   network: "outbound HTTP to $TELETHON_PLUS_URL (every API/MCP call), plus server-side fetch of caller-supplied file_url when present (POST /api/messages, send_file)"
-  account_access: "full-access Telegram user account — read, write, and admin (not a sandboxed bot); every call acts as the account owner"
+  account_access: "full-access Telegram user account: read, write, and admin (not a sandboxed bot); every call acts as the account owner"
 ---
 
 # telethon-plus
 
-Your Telegram account behind an HTTP API. Wraps [Telethon](https://codeberg.org/Lonami/Telethon) — the real MTProto **userbot** client, a full user account, not the neutered Bot API — behind a JSON HTTP API and a Model Context Protocol endpoint. Same tool registry, two doors: `POST` JSON at `/api/...`, or point an MCP-aware agent at `/mcp/`. Either way it talks to Telegram **as you**, with full account access.
+Your Telegram account behind an HTTP API. Wraps [Telethon](https://codeberg.org/Lonami/Telethon) (the real MTProto **userbot** client, a full user account, not the neutered Bot API) behind a JSON HTTP API and a Model Context Protocol endpoint. Same tool registry, two doors: `POST` JSON at `/api/...`, or point an MCP-aware agent at `/mcp/`. Either way it talks to Telegram **as you**, with full account access.
 
 Capabilities:
 
-- **Messages** — send text, send media from a URL, read history, fetch one message, edit, bulk-delete, forward, mark read.
-- **Reactions / pins** — react with an emoji, remove a reaction, pin / unpin.
-- **Dialogs / entities** — list your chats, resolve any `@username` / phone / `t.me` link / numeric ID to a profile, bulk-resolve.
-- **Media** — download an attachment (raw bytes over HTTP, or base64 via MCP).
-- **Chats** — create a supergroup/channel, delete one you own, join public / private-invite, leave, resolve a channel's linked discussion group, list participants.
-- **Admin** — ban / unban / kick / promote / demote in groups you administer.
-- **Polls** — create, vote, read results.
-- **Incoming events** — every new message / edit / delete / chat action streamed over WebSocket **and** POSTed to your webhook (`TELETHON_POST_TO_URL`).
-- **Health / throttle** — liveness, live rate-limit state, flood-risk tier, Prometheus metrics.
+- **Messages**: send text, send media from a URL, read history, fetch one message, edit, bulk-delete, forward, mark read.
+- **Reactions / pins**: react with an emoji, remove a reaction, pin / unpin.
+- **Dialogs / entities**: list your chats, resolve any `@username` / phone / `t.me` link / numeric ID to a profile, bulk-resolve.
+- **Media**: download an attachment (raw bytes over HTTP, or base64 via MCP).
+- **Chats**: create a supergroup/channel, delete one you own, join public / private-invite, leave, resolve a channel's linked discussion group, list participants.
+- **Admin**: ban / unban / kick / promote / demote in groups you administer.
+- **Polls**: create, vote, read results.
+- **Incoming events**: every new message / edit / delete / chat action streamed over WebSocket **and** POSTed to your webhook (`TELETHON_POST_TO_URL`).
+- **Health / throttle**: liveness, live rate-limit state, flood-risk tier, Prometheus metrics.
 
 For installation, login, and container setup, see [references/setup.md](references/setup.md).
 
 ## Security & safety
 
-- **Declared capabilities** (see `permissions:` in the frontmatter): `shell` (setup-only), `network` (runtime HTTP), and full Telegram account access. **Setup-only shell vs. runtime API is a hard line** — `docker run` / `docker compose` / `curl` in [references/setup.md](references/setup.md) are one-time operator commands to stand up the container; every runtime call this skill makes afterward is a plain HTTP request (`curl` as an HTTP client, or MCP), never a new shell/docker invocation against the host.
-- **Outbound HTTP** — every API call is a `curl`/HTTP request to the `telethon-plus` server (`$TELETHON_PLUS_URL`), and the server itself makes outbound calls to Telegram's MTProto servers and, when `file_url` is used, to whatever URL is given (see the SSRF note below).
-- **Drives a full-access Telegram user account** — read AND write AND admin, not a sandboxed bot. Any call this skill makes acts as the account owner (see "Authorized / responsible use" below for the account-level rules).
-- **Destructive / admin operations require explicit user confirmation** naming the exact target (chat, message IDs, user) before running — see the per-endpoint warnings in the API tables below (`DELETE /api/chats`, ban/kick/promote, bulk `DELETE /api/messages`).
-- **Deployment:** bind the server to `localhost`/loopback or put it behind TLS on a reverse proxy, set `TELETHON_AUTH_KEY` (empty = no auth, wide open), and never expose `/mcp/` or `/api/` to untrusted agents/networks — either surface hands out full account control. See [references/setup.md](references/setup.md) for the full deployment + auth guidance.
+- **Declared capabilities** (see `permissions:` in the frontmatter): `shell` (setup-only), `network` (runtime HTTP), and full Telegram account access. **Setup-only shell vs. runtime API is a hard line**: `docker run` / `docker compose` / `curl` in [references/setup.md](references/setup.md) are one-time operator commands to stand up the container; every runtime call this skill makes afterward is a plain HTTP request (`curl` as an HTTP client, or MCP), never a new shell/docker invocation against the host.
+- **Outbound HTTP**: every API call is a `curl`/HTTP request to the `telethon-plus` server (`$TELETHON_PLUS_URL`), and the server itself makes outbound calls to Telegram's MTProto servers and, when `file_url` is used, to whatever URL is given (see the SSRF note below).
+- **Drives a full-access Telegram user account**: read AND write AND admin, not a sandboxed bot. Any call this skill makes acts as the account owner (see "Authorized / responsible use" below for the account-level rules).
+- **Destructive / admin operations require explicit user confirmation** naming the exact target (chat, message IDs, user) before running. See the per-endpoint warnings in the API tables below (`DELETE /api/chats`, ban/kick/promote, bulk `DELETE /api/messages`).
+- **Deployment:** bind the server to `localhost`/loopback or put it behind TLS on a reverse proxy, set `TELETHON_AUTH_KEY` (empty = no auth, wide open), and never expose `/mcp/` or `/api/` to untrusted agents/networks. Either surface hands out full account control. See [references/setup.md](references/setup.md) for the full deployment + auth guidance.
 
 ## Authorized / responsible use
 
-**This drives a REAL Telegram user account, not a bot.** Whoever holds the session string *is* the account owner — full read/write access to every DM, group, and channel that account can reach. Treat it like the account's password.
+**This drives a REAL Telegram user account, not a bot.** Whoever holds the session string *is* the account owner: full read/write access to every DM, group, and channel that account can reach. Treat it like the account's password.
 
 - Only ever point this skill at an instance **the user runs and owns**, driving **the user's own account** (or an account they are explicitly authorized to operate).
-- **Do not** send spam, mass-DM strangers, scrape at volume, auto-join channels en masse, or run any automation that violates [Telegram's Terms of Service](https://telegram.org/tos) — that gets the account **banned** (the throttle layer reduces flood risk, it does not make abuse safe).
+- **Do not** send spam, mass-DM strangers, scrape at volume, auto-join channels en masse, or run any automation that violates [Telegram's Terms of Service](https://telegram.org/tos). That gets the account **banned** (the throttle layer reduces flood risk, it does not make abuse safe).
 - **Never** provision, escalate, or log in a new account from here. This skill is **consumer-only**: it talks to an already-running, already-authorized instance. First-time login is an operator-side step (see setup) and is out of scope for the agent.
 - Writes are destructive and act as the user. `DELETE /api/chats` is irreversible; deleting / editing messages and banning users are visible actions others see. Confirm intent before running writes on shared chats.
 - Never print, log, or echo the session string, `TELETHON_API_HASH`, `TELETHON_AUTH_KEY`, phone numbers, or message contents beyond what the task needs.
@@ -60,21 +60,21 @@ For installation, login, and container setup, see [references/setup.md](referenc
 
 ## When NOT To Use
 
-- **You don't have an instance the user owns** — this is consumer-only; it never stands up or logs in an account.
-- **Anything the user isn't authorized to do with that account** — spam, mass outreach, bulk scraping, ToS-violating automation.
-- **Bot-API-style multi-tenant bots** — this is one user account per container, not a bot framework. If you need a bot token surface, use the Bot API instead.
-- **Real-time streaming reads** — history reads are request/response. For live events use the WS stream or the webhook, not a poll loop.
-- **Bulk resolving cold numeric IDs** — MTProto needs an `access_hash`. Numeric IDs only resolve for entities the session has already seen (via a prior `@username` / `t.me` lookup, a dialog list, or an incoming message). Resolve by `@username` first.
+- **You don't have an instance the user owns**: this is consumer-only; it never stands up or logs in an account.
+- **Anything the user isn't authorized to do with that account**: spam, mass outreach, bulk scraping, ToS-violating automation.
+- **Bot-API-style multi-tenant bots**: this is one user account per container, not a bot framework. If you need a bot token surface, use the Bot API instead.
+- **Real-time streaming reads**: history reads are request/response. For live events use the WS stream or the webhook, not a poll loop.
+- **Bulk resolving cold numeric IDs**: MTProto needs an `access_hash`. Numeric IDs only resolve for entities the session has already seen (via a prior `@username` / `t.me` lookup, a dialog list, or an incoming message). Resolve by `@username` first.
 
 ## Setup
 
-The container should already be running and logged in (operator-side — see setup). Set the base URL:
+The container should already be running and logged in (operator-side, see setup). Set the base URL:
 
 ```bash
 export TELETHON_PLUS_URL=http://localhost:8080
 ```
 
-If the server was started with `TELETHON_AUTH_KEY`, export it too — every request except `/healthz` and `/metrics` then needs the bearer header:
+If the server was started with `TELETHON_AUTH_KEY`, export it too. Every request except `/healthz` and `/metrics` then needs the bearer header:
 
 ```bash
 export TELETHON_AUTH_KEY=<the-key>
@@ -88,17 +88,17 @@ curl -s $TELETHON_PLUS_URL/healthz
 # {"status": "ok", "authorized": true}
 ```
 
-If the session is dead (bad/revoked string, or Telegram unreachable) the container fails to start rather than booting with `authorized: false` — the process exits and `/healthz` never comes up. Check `docker logs` and re-login. `/healthz` is always public.
+If the session is dead (bad/revoked string, or Telegram unreachable) the container fails to start rather than booting with `authorized: false`. The process exits and `/healthz` never comes up. Check `docker logs` and re-login. `/healthz` is always public.
 
 For install / first-time login / env vars / ports, see [references/setup.md](references/setup.md).
 
 ## Conventions
 
-- **Response shape:** every 2xx returns the resource directly — no `{"result": ...}` envelope. Lists are JSON arrays, singles are JSON objects. Errors return `{"detail": ...}` (FastAPI standard).
+- **Response shape:** every 2xx returns the resource directly (no `{"result": ...}` envelope). Lists are JSON arrays, singles are JSON objects. Errors return `{"detail": ...}` (FastAPI standard).
 - **Chat references** (`chat`, `from_chat`, `to_chat`) accept whatever Telethon accepts: `@username`, phone `+1234567890`, `https://t.me/name`, numeric ID `123456789`, supergroup/channel ID `-1001234567890`, or `me` (your Saved Messages). In `{chat}` path segments, phone and `t.me` links must be URL-encoded (`+` → `%2B`); usernames and IDs work inline.
-- **Errors:** `400` bad JSON / validation / bad input · `401` missing-or-wrong bearer (only when `TELETHON_AUTH_KEY` set) · `403` write attempted in read-only mode · `404` unknown endpoint / admin action · `429` `FLOOD_WAIT` too long to sleep through, with `Retry-After` and body `{"telegram_error": "FloodWaitError", "message": "...", "seconds": N}`: wait that long before repeating the call · `502` any other Telegram RPC error, body `{"telegram_error": "...", "message": "..."}`.
+- **Errors:** `400` bad JSON / validation / bad input · `401` missing-or-wrong bearer (only when `TELETHON_AUTH_KEY` set) · `403` write attempted in read-only mode · `404` unknown endpoint / admin action · `429` `FLOOD_WAIT` too long to sleep through, with `Retry-After` and body `{"detail": {"telegram_error": "FloodWaitError", "message": "...", "seconds": N}}`: wait that long before repeating the call · `502` any other Telegram RPC error, body `{"detail": {"telegram_error": "...", "message": "..."}}`.
 
-## API — `GET /api/me`
+## API: `GET /api/me`
 
 The authorized account's own profile.
 
@@ -110,7 +110,7 @@ curl -s $TELETHON_PLUS_URL/api/me | jq
 { "id": 123456789, "type": "User", "username": "someone", "first_name": "Some", "phone": "+..." }
 ```
 
-## API — `GET /api/entities`
+## API: `GET /api/entities`
 
 Resolve any chat reference to a full profile.
 
@@ -123,7 +123,7 @@ curl -s "$TELETHON_PLUS_URL/api/entities?chat=@telegram" | jq
 # { "id": 1234567, "type": "Channel", "username": "telegram", "title": "Telegram" }
 ```
 
-## API — `POST /api/entities/bulk`
+## API: `POST /api/entities/bulk`
 
 Resolve many references at once, honoring the resolve-username bucket.
 
@@ -131,15 +131,15 @@ Resolve many references at once, honoring the resolve-username bucket.
 |---|---|---|---|
 | `chats` | list[string] | required | References to resolve |
 
-## API — `GET /api/dialogs`
+## API: `GET /api/dialogs`
 
 List the account's dialogs, newest activity first.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `limit` | int | 20 | 1–200 |
-| `archived` | bool | false | Include archived chats |
-| `search` | string | — | Case-insensitive substring on title / username |
+| `limit` | int | 20 | 1-200 |
+| `archived` | bool | false | List archived chats instead of the main list |
+| `search` | string | none | Case-insensitive substring on title / username |
 
 ```bash
 curl -s "$TELETHON_PLUS_URL/api/dialogs?limit=10&archived=false" | jq
@@ -147,16 +147,16 @@ curl -s "$TELETHON_PLUS_URL/api/dialogs?limit=10&archived=false" | jq
 
 Each dialog carries `id`, `type`, `username`, `first_name`/`title`, `unread_count`, `pinned`, and a `last_message` object.
 
-## API — `GET /api/messages`
+## API: `GET /api/messages`
 
 Read recent messages from a chat (newest first).
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `chat` | string | required | Chat to read from |
-| `limit` | int | 20 | 1–200 |
+| `limit` | int | 20 | 1-200 |
 | `offset_id` | int | 0 | Start before this message ID (pagination) |
-| `search` | string | — | Full-text filter |
+| `search` | string | none | Full-text filter |
 
 ```bash
 curl -s "$TELETHON_PLUS_URL/api/messages?chat=me&limit=5&search=hello" | jq
@@ -172,7 +172,7 @@ curl -s "$TELETHON_PLUS_URL/api/messages?chat=me&limit=5&search=hello" | jq
 
 Returns `[]` if nothing matches.
 
-## API — `GET /api/messages/{id}`
+## API: `GET /api/messages/{id}`
 
 Fetch a single message. `chat` is a required query param.
 
@@ -180,16 +180,16 @@ Fetch a single message. `chat` is a required query param.
 curl -s "$TELETHON_PLUS_URL/api/messages/4242?chat=me" | jq
 ```
 
-## API — `POST /api/messages`
+## API: `POST /api/messages`
 
-Send a message. **One endpoint, two flavors** — if the body has `file_url`, that URL is fetched and sent as media (with `text` as the caption); otherwise `text` is sent as a plain message.
+Send a message. **One endpoint, two flavors**: if the body has `file_url`, that URL is fetched and sent as media (with `text` as the caption); otherwise `text` is sent as a plain message.
 
-> **SSRF note:** `file_url` is fetched **server-side** — the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. **Don't pass arbitrary caller-supplied URLs through as `file_url`.** Restrict it to `https` scheme and a small set of trusted, publicly-known domains you control or explicitly trust — never build `file_url` from untrusted input (a message someone else sent, a scraped page, an LLM-generated guess). **Prefer local file upload over server-side URL fetches**: fetch the file yourself (client-side, where you can validate it) and send it as a direct upload instead of handing the container a URL to fetch blind.
+> **SSRF note:** `file_url` is fetched **server-side**: the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. **Don't pass arbitrary caller-supplied URLs through as `file_url`.** Restrict it to `https` scheme and a small set of trusted, publicly-known domains you control or explicitly trust. Never build `file_url` from untrusted input (a message someone else sent, a scraped page, an LLM-generated guess). **Prefer local file upload over server-side URL fetches**: fetch the file yourself (client-side, where you can validate it) and send it as a direct upload instead of handing the container a URL to fetch blind.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `chat` | string | required | Target chat |
-| `text` | string | required if no `file_url` | Message text or caption (1–4096 chars) |
+| `text` | string | required if no `file_url` | Message text or caption (1-4096 chars) |
 | `file_url` | string | null | HTTPS URL to fetch and send as media |
 | `parse_mode` | string | null | `md` / `markdown` / `html` / null |
 | `reply_to` | int | null | Message ID to reply to |
@@ -213,14 +213,14 @@ curl -s -X POST $TELETHON_PLUS_URL/api/messages \
 
 Returns the created message object.
 
-## API — `PATCH /api/messages/{id}`
+## API: `PATCH /api/messages/{id}`
 
 Edit a message you sent. ID in the URL, rest in the body.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `chat` | string | required | Chat containing the message |
-| `text` | string | required | New text (1–4096 chars) |
+| `text` | string | required | New text (1-4096 chars) |
 | `parse_mode` | string | null | `md` / `html` / null |
 | `link_preview` | bool | true | Show link previews |
 
@@ -230,7 +230,7 @@ curl -s -X PATCH $TELETHON_PLUS_URL/api/messages/4242 \
   -d '{"chat":"me","text":"fixed version","parse_mode":"md"}' | jq
 ```
 
-## API — `DELETE /api/messages`
+## API: `DELETE /api/messages`
 
 Bulk delete by ID (body carries the list).
 
@@ -249,7 +249,7 @@ curl -s -X DELETE $TELETHON_PLUS_URL/api/messages \
 # { "deleted": 2, "requested": 2 }
 ```
 
-## API — `POST /api/messages/forward`
+## API: `POST /api/messages/forward`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -258,7 +258,7 @@ curl -s -X DELETE $TELETHON_PLUS_URL/api/messages \
 | `message_ids` | list[int] | required | IDs to forward (max 100) |
 | `silent` | bool | false | Forward without notification |
 
-## API — `POST /api/messages/read`
+## API: `POST /api/messages/read`
 
 Mark messages as read.
 
@@ -273,7 +273,7 @@ curl -s -X POST $TELETHON_PLUS_URL/api/messages/read \
 # { "ok": true }
 ```
 
-## API — `GET /api/messages/{id}/media`
+## API: `GET /api/messages/{id}/media`
 
 Download a message's attachment as **raw bytes** (binary stream). `Content-Type` comes from Telegram; `Content-Disposition: attachment; filename=...` is set. `chat` is a required query param.
 
@@ -286,9 +286,9 @@ Download a message's attachment as **raw bytes** (binary stream). `Content-Type`
 curl -s "$TELETHON_PLUS_URL/api/messages/4242/media?chat=me" -o attachment.bin
 ```
 
-MCP clients: use the `download_media` tool instead — it returns base64 in the JSON result.
+MCP clients: use the `download_media` tool instead, which returns base64 in the JSON result.
 
-## API — reactions & pins
+## API: reactions & pins
 
 | Method + path | Body / params | What it does |
 |---|---|---|
@@ -302,30 +302,30 @@ curl -s -X POST $TELETHON_PLUS_URL/api/messages/4242/reactions \
   -H 'Content-Type: application/json' -d '{"chat":"me","emoji":"🔥"}' | jq
 ```
 
-## API — `GET /api/participants`
+## API: `GET /api/participants`
 
 List members of a group or channel.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `chat` | string | required | Group or channel |
-| `limit` | int | 100 | 1–1000 |
-| `search` | string | — | Filter by name |
+| `limit` | int | 100 | 1-1000 |
+| `search` | string | none | Filter by name |
 
 Large public channels may return a limited set or require admin rights.
 
-## API — chats
+## API: chats
 
 | Method + path | Body / params | What it does |
 |---|---|---|
 | `POST /api/chats` | `title`, `megagroup?` (default `true`) | Create a supergroup (`true`) or broadcast channel (`false`) |
-| `DELETE /api/chats` | `chat` | Delete a supergroup/channel you own — **irreversible** |
+| `DELETE /api/chats` | `chat` | Delete a supergroup/channel you own (**irreversible**) |
 | `POST /api/chats/join` | `chat` | Join a public channel/group |
 | `POST /api/chats/invite` | `invite` | Join a private chat via a `t.me/+hash` link |
 | `POST /api/chats/leave` | `chat` | Leave a channel/group |
-| `GET /api/chats/{chat}/linked` | — | Resolve a channel's linked discussion group |
+| `GET /api/chats/{chat}/linked` | none | Resolve a channel's linked discussion group |
 
-> **Destructive.** `DELETE /api/chats` permanently deletes the chat for everyone in it and cannot be undone. Require explicit user confirmation naming the exact chat before calling it — prefer leaving it disabled/unused unless the task genuinely needs it.
+> **Destructive.** `DELETE /api/chats` permanently deletes the chat for everyone in it and cannot be undone. Require explicit user confirmation naming the exact chat before calling it, and prefer leaving it disabled/unused unless the task genuinely needs it.
 
 ```bash
 curl -s -X POST $TELETHON_PLUS_URL/api/chats \
@@ -333,16 +333,16 @@ curl -s -X POST $TELETHON_PLUS_URL/api/chats \
 # { "id": 1234567890, "type": "Channel", "title": "my-group" }
 ```
 
-## API — chat admin
+## API: chat admin
 
 `POST /api/chats/{chat}/admin/{action}` where `{action}` is one of `ban`, `unban`, `kick`, `promote`, `demote`. Requires admin rights in the chat.
 
 | Action | Body | Notes |
 |---|---|---|
-| `ban` | `user`, `until_seconds?` | Ban; `until_seconds=0` = permanent — **visible, disruptive** |
+| `ban` | `user`, `until_seconds?` | Ban; `until_seconds=0` = permanent (**visible, disruptive**) |
 | `unban` | `user` | Lift a ban |
-| `kick` | `user` | Ban + immediate unban (they can rejoin via invite) — **visible, disruptive** |
-| `promote` | `user`, `title?` (≤16 chars), plus booleans `change_info`, `post_messages`, `edit_messages`, `delete_messages`, `ban_users`, `invite_users`, `pin_messages`, `add_admins`, `anonymous`, `manage_call` (all default `false`) | Grant admin rights — pass the specific booleans you want, omitting all of them grants admin with no permissions — **privilege escalation, irreversible without another admin demoting them back** |
+| `kick` | `user` | Ban + immediate unban (they can rejoin via invite). **Visible, disruptive.** |
+| `promote` | `user`, `title?` (≤16 chars), plus booleans `change_info`, `post_messages`, `edit_messages`, `delete_messages`, `ban_users`, `invite_users`, `pin_messages`, `add_admins`, `anonymous`, `manage_call` (all default `false`) | Grant admin rights. Pass the specific booleans you want; at least one must be `true`, otherwise the call fails with `400` (use `demote` to strip rights). **Privilege escalation, irreversible without another admin demoting them back.** |
 | `demote` | `user` | Strip admin rights |
 
 > **Admin ops act on other people's membership/permissions and are visible to the whole chat.** Require explicit user confirmation naming the exact chat and target user before calling `ban`, `kick`, or `promote`.
@@ -352,7 +352,7 @@ curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
   -H 'Content-Type: application/json' -d '{"user":"@baduser"}' | jq
 ```
 
-## API — polls
+## API: polls
 
 | Method + path | Body / params | What it does |
 |---|---|---|
@@ -360,24 +360,24 @@ curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
 | `POST /api/polls/{id}/vote` | `chat`, `options` (0-based indices) | Vote |
 | `GET /api/polls/{id}/results` | `chat` | Current vote counts |
 
-## API — status & observability
+## API: status & observability
 
 | Path | What it returns |
 |---|---|
-| `GET /healthz` | `{"status": "ok", "authorized": <bool>}` — always public |
+| `GET /healthz` | `{"status": "ok", "authorized": <bool>}`, always public |
 | `GET /api/throttle/status` | Live bucket usage, adaptive multiplier, recent flood events, cache stats |
 | `GET /api/account/health` | `{"authorized", "risk", "multiplier", "flood_events_1h", ...}`; `risk` is `ok` / `warning` / `high` |
 | `GET /metrics` | Prometheus exposition (public even when auth is on) |
 
 Every `/api/...` response also carries `X-Throttle-Multiplier`, `X-Throttle-Flood-Events-1h`, and `X-RateLimit-Remaining-<bucket>` headers, so clients can self-throttle without polling.
 
-> The server ships **conservative anti-flood throttling** on by default (per-method token buckets, per-chat send/read intervals, global gap + jitter, adaptive backoff on `FLOOD_WAIT`, plus a persistent entity cache). If a call seems slow, it may be the throttle protecting the account — check `GET /api/throttle/status`. Tuning the buckets is an operator concern (see setup); don't try to defeat them.
+> The server ships **conservative anti-flood throttling** on by default (per-method token buckets, per-chat send/read intervals, global gap + jitter, adaptive backoff on `FLOOD_WAIT`, plus a persistent entity cache). If a call seems slow, it may be the throttle protecting the account. Check `GET /api/throttle/status`. Tuning the buckets is an operator concern (see setup); don't try to defeat them.
 
 ## Incoming-message webhook (`TELETHON_POST_TO_URL`)
 
-> **Data exfiltration warning:** enabling `TELETHON_POST_TO_URL` forwards **every incoming Telegram event** — full message content, sender metadata, and account activity — to that external endpoint, for as long as the container runs. Point it ONLY at a trusted HTTPS endpoint you control. Anyone who controls that endpoint gets a live copy of everything the account receives.
+> **Data exfiltration warning:** enabling `TELETHON_POST_TO_URL` forwards **every incoming Telegram event** (full message content, sender metadata, and account activity) to that external endpoint, for as long as the container runs. Point it ONLY at a trusted HTTPS endpoint you control. Anyone who controls that endpoint gets a live copy of everything the account receives.
 
-When the operator sets `TELETHON_POST_TO_URL` on the server, **every incoming Telegram event** (new message, edit, delete, chat action) is `POST`ed to that URL as JSON — fire-and-forget, so a slow or failing webhook never blocks Telethon's loop. This is the way to pipe incoming DMs/messages into a separate app or worker that can't hold a WebSocket open.
+When the operator sets `TELETHON_POST_TO_URL` on the server, **every incoming Telegram event** (new message, edit, delete, chat action) is `POST`ed to that URL as JSON (fire-and-forget, so a slow or failing webhook never blocks Telethon's loop). This is the way to pipe incoming DMs/messages into a separate app or worker that can't hold a WebSocket open.
 
 Event payload:
 
@@ -393,13 +393,13 @@ Event payload:
 }
 ```
 
-`type` is `NewMessage`, `MessageEdited`, `MessageDeleted`, or `ChatAction` — same shape, fewer fields on the non-message ones.
+`type` is `NewMessage`, `MessageEdited`, `MessageDeleted`, or `ChatAction` (same shape, fewer fields on the non-message ones).
 
 The same events also stream over **WebSocket** at `GET /ws/updates` (pass `?token=<TELETHON_AUTH_KEY>` when auth is on, since browsers can't set the Authorization header). Multiple subscribers each get their own queue of `TELETHON_UPDATES_BUFFER_SIZE` events (default 256). A client that falls that far behind is closed with code `1013`. Reconnect, then read what was missed with `GET /api/messages`. Server shutdown closes clients with `1001`. Updates are only registered when `TELETHON_UPDATES_ENABLED=true` (the default).
 
 ## MCP Endpoint
 
-An MCP server is mounted at **`/mcp/`** using the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), on the same port as the HTTP API, behind the same bearer auth. It's **stateless** — every request is independent, no session juggling. Every tool in the registry (same names, same schemas as the endpoints above) is exposed automatically.
+An MCP server is mounted at **`/mcp/`** using the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), on the same port as the HTTP API, behind the same bearer auth. It's **stateless**: every request is independent, no session juggling. Every tool in the registry (same names, same schemas as the endpoints above) is exposed automatically.
 
 Point an MCP-aware agent at:
 
@@ -431,7 +431,7 @@ curl -s $TELETHON_PLUS_URL/mcp/ \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# tools/call — send a message
+# tools/call: send a message
 curl -s $TELETHON_PLUS_URL/mcp/ \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -448,7 +448,7 @@ MCP tool errors come back as an error result (`isError: true`) whose text is JSO
 
 ## Bearer-Token Auth
 
-If `TELETHON_AUTH_KEY` is set on the server, every route **except `/healthz` and `/metrics`** requires `Authorization: Bearer <key>` (constant-time compared). Missing/wrong → `401 {"detail":"unauthorized"}`. The WebSocket takes the key as `?token=`. Empty/unset key = wide open — fine on a private network; for untrusted networks pair the key with a reverse proxy doing TLS.
+If `TELETHON_AUTH_KEY` is set on the server, every route **except `/healthz` and `/metrics`** requires `Authorization: Bearer <key>` (constant-time compared). Missing/wrong → `401 {"detail":"unauthorized"}`. The WebSocket takes the key as `?token=`. Empty/unset key = wide open (fine on a private network); for untrusted networks pair the key with a reverse proxy doing TLS.
 
 ```bash
 curl -s -H "Authorization: Bearer $TELETHON_AUTH_KEY" $TELETHON_PLUS_URL/api/me | jq
@@ -468,7 +468,7 @@ curl -s "$TELETHON_PLUS_URL/api/messages?chat=@somechannel&limit=10" \
 ```bash
 curl -s -X POST $TELETHON_PLUS_URL/api/messages \
   -H 'Content-Type: application/json' \
-  -d '{"chat":"@someone","text":"heads up — deploy is done"}' | jq
+  -d '{"chat":"@someone","text":"heads up, deploy is done"}' | jq
 ```
 
 ### Note to self (Saved Messages)
