@@ -43,3 +43,8 @@ coverage.xml
 
 # Local agent and editor settings.
 *.local.json
+
+# Documentation site build output.
+/website/node_modules/
+/website/.docusaurus/
+/website/build/

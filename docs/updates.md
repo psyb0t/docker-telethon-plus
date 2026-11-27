@@ -1,7 +1,6 @@
 ---
 title: "Updates and webhooks"
 description: "Receive the account's incoming Telegram events live: the /ws/updates websocket, the outbound webhook, the event payload, and what happens when a client falls behind."
-nav_order: 7
 ---
 
 # Updates and webhooks

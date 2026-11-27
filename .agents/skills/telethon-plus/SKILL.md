@@ -6,8 +6,9 @@ user-invocable: true
 metadata:
   { "openclaw": { "emoji": "✈️", "primaryEnv": "TELETHON_PLUS_URL", "requires": { "bins": ["docker", "curl"] } } }
 permissions:
-  shell: "setup-only: docker/curl for install, login, and container management (see references/setup.md); runtime API calls are plain HTTP, not shell"
-  network: "outbound HTTP to $TELETHON_PLUS_URL (every API/MCP call), plus server-side fetch of caller-supplied file_url when present (POST /api/messages, send_file)"
+  shell: "runs `curl` and the bundled `scripts/telethon.sh` wrapper (curl + jq) for runtime API calls, which can read, send (including media by URL) and delete messages as the account; operator setup in references/setup.md runs `docker` and `make login`"
+  network: "HTTP to $TELETHON_PLUS_URL for every API/MCP call; the server it points at talks to Telegram, fetches a caller-supplied file_url server-side (POST /api/messages, send_file), and posts incoming events to TELETHON_POST_TO_URL when the operator sets it; `docker pull` uses Docker Hub"
+  filesystem: "writes attachments the user asks to download to a path the user chooses; operator setup mounts a /cache directory and may keep the session string in a local .env file"
   account_access: "full-access Telegram user account: read, write, and admin (not a sandboxed bot); every call acts as the account owner"
 ---
 
@@ -31,10 +32,9 @@ For installation, login, and container setup, see [references/setup.md](referenc
 
 ## Security & safety
 
-- **Declared capabilities** (see `permissions:` in the frontmatter): `shell` (setup-only), `network` (runtime HTTP), and full Telegram account access. **Setup-only shell vs. runtime API is a hard line**: `docker run` / `docker compose` / `curl` in [references/setup.md](references/setup.md) are one-time operator commands to stand up the container; every runtime call this skill makes afterward is a plain HTTP request (`curl` as an HTTP client, or MCP), never a new shell/docker invocation against the host.
-- **Outbound HTTP**: every API call is a `curl`/HTTP request to the `telethon-plus` server (`$TELETHON_PLUS_URL`), and the server itself makes outbound calls to Telegram's MTProto servers and, when `file_url` is used, to whatever URL is given (see the SSRF note below).
-- **Drives a full-access Telegram user account**: read AND write AND admin, not a sandboxed bot. Any call this skill makes acts as the account owner (see "Authorized / responsible use" below for the account-level rules).
-- **Destructive / admin operations require explicit user confirmation** naming the exact target (chat, message IDs, user) before running. See the per-endpoint warnings in the API tables below (`DELETE /api/chats`, ban/kick/promote, bulk `DELETE /api/messages`).
+- **Declared capabilities** (see `permissions:` in the frontmatter): runtime calls are plain HTTP via `curl`, `scripts/telethon.sh` or MCP; `docker` and `make login` appear only in the one-time operator setup in [references/setup.md](references/setup.md). The account itself is full access: read, write and admin, not a sandboxed bot.
+- **Where data goes.** Requests go to `$TELETHON_PLUS_URL`; use a loopback address or an HTTPS URL of a server you run. That server talks to Telegram's MTProto servers, fetches `file_url` when you pass one (see the note under `POST /api/messages`), and, when the operator sets `TELETHON_POST_TO_URL`, posts every incoming event there (see "Incoming-message webhook").
+- **Guardrail for destructive and admin operations.** Act only on chats, messages and members the task owns, and only when the user asked for that specific action, naming the exact target (chat, message IDs, user). This covers `DELETE /api/messages`, `DELETE /api/chats`, and ban, kick, promote and demote.
 - **Deployment:** bind the server to `localhost`/loopback or put it behind TLS on a reverse proxy, set `TELETHON_AUTH_KEY` (empty = no auth, wide open), and never expose `/mcp/` or `/api/` to untrusted agents/networks. Either surface hands out full account control. See [references/setup.md](references/setup.md) for the full deployment + auth guidance.
 
 ## Authorized / responsible use
@@ -44,7 +44,7 @@ For installation, login, and container setup, see [references/setup.md](referenc
 - Only ever point this skill at an instance **the user runs and owns**, driving **the user's own account** (or an account they are explicitly authorized to operate).
 - **Do not** send spam, mass-DM strangers, scrape at volume, auto-join channels en masse, or run any automation that violates [Telegram's Terms of Service](https://telegram.org/tos). That gets the account **banned** (the throttle layer reduces flood risk, it does not make abuse safe).
 - **Never** provision, escalate, or log in a new account from here. This skill is **consumer-only**: it talks to an already-running, already-authorized instance. First-time login is an operator-side step (see setup) and is out of scope for the agent.
-- Writes are destructive and act as the user. `DELETE /api/chats` is irreversible; deleting / editing messages and banning users are visible actions others see. Confirm intent before running writes on shared chats.
+- Writes act as the user, and other people in the chat see them.
 - Never print, log, or echo the session string, `TELETHON_API_HASH`, `TELETHON_AUTH_KEY`, phone numbers, or message contents beyond what the task needs.
 
 ## When To Use
@@ -184,7 +184,7 @@ curl -s "$TELETHON_PLUS_URL/api/messages/4242?chat=me" | jq
 
 Send a message. **One endpoint, two flavors**: if the body has `file_url`, that URL is fetched and sent as media (with `text` as the caption); otherwise `text` is sent as a plain message.
 
-> **SSRF note:** `file_url` is fetched **server-side**: the container makes the HTTP request, not the caller. An attacker-controlled `file_url` can be used to probe internal/private network addresses reachable from the container. **Don't pass arbitrary caller-supplied URLs through as `file_url`.** Restrict it to `https` scheme and a small set of trusted, publicly-known domains you control or explicitly trust. Never build `file_url` from untrusted input (a message someone else sent, a scraped page, an LLM-generated guess). **Prefer local file upload over server-side URL fetches**: fetch the file yourself (client-side, where you can validate it) and send it as a direct upload instead of handing the container a URL to fetch blind.
+> **`file_url` is fetched by the server, not the caller.** The server accepts `http` and `https` URLs, follows redirects, and does not filter private or loopback addresses, so a hostile `file_url` can make the container request internal addresses it can reach. Use only `https` URLs from a short list of domains you trust, and never build one from untrusted input (a message someone else sent, a scraped page, a guess).
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -240,7 +240,7 @@ Bulk delete by ID (body carries the list).
 | `message_ids` | list[int] | required | IDs to delete (max 100) |
 | `revoke` | bool | true | Delete for everyone, not just yourself |
 
-> **Irreversible**, and with `revoke: true` (the default) it deletes for everyone in the chat, not just you. Confirm the exact `chat` and `message_ids` with the user before calling this on a shared chat.
+> Irreversible. With `revoke: true` (the default) it deletes for everyone in the chat, not just you.
 
 ```bash
 curl -s -X DELETE $TELETHON_PLUS_URL/api/messages \
@@ -325,7 +325,7 @@ Large public channels may return a limited set or require admin rights.
 | `POST /api/chats/leave` | `chat` | Leave a channel/group |
 | `GET /api/chats/{chat}/linked` | none | Resolve a channel's linked discussion group |
 
-> **Destructive.** `DELETE /api/chats` permanently deletes the chat for everyone in it and cannot be undone. Require explicit user confirmation naming the exact chat before calling it, and prefer leaving it disabled/unused unless the task genuinely needs it.
+> `DELETE /api/chats` permanently deletes the chat for everyone in it and cannot be undone.
 
 ```bash
 curl -s -X POST $TELETHON_PLUS_URL/api/chats \
@@ -345,7 +345,7 @@ curl -s -X POST $TELETHON_PLUS_URL/api/chats \
 | `promote` | `user`, `title?` (≤16 chars), plus booleans `change_info`, `post_messages`, `edit_messages`, `delete_messages`, `ban_users`, `invite_users`, `pin_messages`, `add_admins`, `anonymous`, `manage_call` (all default `false`) | Grant admin rights. Pass the specific booleans you want; at least one must be `true`, otherwise the call fails with `400` (use `demote` to strip rights). **Privilege escalation, irreversible without another admin demoting them back.** |
 | `demote` | `user` | Strip admin rights |
 
-> **Admin ops act on other people's membership/permissions and are visible to the whole chat.** Require explicit user confirmation naming the exact chat and target user before calling `ban`, `kick`, or `promote`.
+> Admin ops change other people's membership and permissions, and the whole chat sees them.
 
 ```bash
 curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
@@ -375,7 +375,7 @@ Every `/api/...` response also carries `X-Throttle-Multiplier`, `X-Throttle-Floo
 
 ## Incoming-message webhook (`TELETHON_POST_TO_URL`)
 
-> **Data exfiltration warning:** enabling `TELETHON_POST_TO_URL` forwards **every incoming Telegram event** (full message content, sender metadata, and account activity) to that external endpoint, for as long as the container runs. Point it ONLY at a trusted HTTPS endpoint you control. Anyone who controls that endpoint gets a live copy of everything the account receives.
+> Setting `TELETHON_POST_TO_URL` sends every incoming Telegram event (message content, sender metadata, account activity) to that endpoint for as long as the container runs. Point it only at an HTTPS endpoint you control.
 
 When the operator sets `TELETHON_POST_TO_URL` on the server, **every incoming Telegram event** (new message, edit, delete, chat action) is `POST`ed to that URL as JSON (fire-and-forget, so a slow or failing webhook never blocks Telethon's loop). This is the way to pipe incoming DMs/messages into a separate app or worker that can't hold a WebSocket open.
 

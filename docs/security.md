@@ -1,7 +1,6 @@
 ---
 title: "Security"
 description: "What telethon-plus can reach and store, how the auth key and session string work, which routes stay public, and the read-only and dry-run switches."
-nav_order: 10
 ---
 
 # Security

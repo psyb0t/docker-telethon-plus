@@ -1,10 +1,7 @@
 ---
 title: "Home"
 description: "telethon-plus runs your Telegram account as an HTTP API and an MCP server: Telethon (MTProto) in a Docker container, with flood protection built in."
-nav_order: 1
-permalink: /
-seo:
-  type: WebSite
+slug: /
 ---
 
 # docker-telethon-plus

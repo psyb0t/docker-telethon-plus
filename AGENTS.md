@@ -31,7 +31,7 @@ Request path: REST route or MCP tool call -> params model validation -> tool han
 - Runtime dependencies pinned exactly in `pyproject.toml` and locked with hashes in `uv.lock`: telethon, fastapi, uvicorn, pydantic, mcp (v1, for `mcp.server.fastmcp`), httpx, cryptg, python-socks, hachoir.
 - uv for locking and installs, with `[tool.uv] exclude-newer` as a seven-day supply-chain age gate.
 - Dev tools in the `dev` group: pytest, pytest-asyncio, pytest-cov, flake8, mypy, black, isort. Security scanners (semgrep, bandit, pip-audit) live in a separate venv in `Dockerfile.dev`.
-- Docs: GitHub Pages from `docs/`, Jekyll with Just the Docs.
+- Docs: a Docusaurus site in `website/` builds `docs/`, and the `docs.yml` workflow publishes it to GitHub Pages from `main`.
 - CI: `.github/workflows/pipeline.yml` calling `psyb0t/reusable-github-workflows`.
 - License: GPL-2.0-or-later (hachoir is GPL v2 only). The OpenClaw plugin under `.agents/plugins/telethon-plus/` is MIT.
 
@@ -50,7 +50,8 @@ Request path: REST route or MCP tool call -> params model validation -> tool han
 | `scripts/bump_exclude_newer.sh` | Moves `exclude-newer` to seven days ago before a dependency change |
 | `tests/unit/` | Offline unit tests with a mocked Telethon client |
 | `tests/` | Integration suite against a real account (`tests/conftest.py` starts the image) |
-| `docs/` | The documentation site |
+| `docs/` | The documentation pages |
+| `website/` | The Docusaurus site that builds `docs/` |
 | `.agents/skills/telethon-plus/` | The agent skill, its `references/setup.md` and `scripts/telethon.sh` |
 | `.agents/plugins/telethon-plus/` | The OpenClaw stdio-to-HTTP MCP bridge plugin |
 | `.agents/.claude-plugin/`, `.agents/.codex-plugin/` | Claude Code and Codex plugin manifests |
@@ -74,7 +75,8 @@ make test-unit   # unit tests with the coverage floor, what CI runs
 make test        # integration suite, needs .env with a real account and TEST_CHAT
 make sec         # security scan into sec.sarif, reports only
 make audit       # pip-audit on the locked runtime deps, fails on a finding
-make docs        # build the site into .testing/docs-site
+make docs        # build the site and check its links in a Node container
+make docs-lock   # refresh website/pnpm-lock.yaml
 make dev-image   # rebuild the dev image after a dependency change
 ```
 

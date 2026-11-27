@@ -1,7 +1,6 @@
 ---
 title: "MCP and agents"
 description: "Connect Claude Code, Codex, OpenClaw or any MCP client to telethon-plus's /mcp/ endpoint: transport, auth, tool errors and the agent plugins."
-nav_order: 6
 ---
 
 # MCP and agents

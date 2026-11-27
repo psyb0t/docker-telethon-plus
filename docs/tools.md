@@ -1,7 +1,6 @@
 ---
 title: "Tools"
 description: "All 34 telethon-plus tools: what each does, its REST route and MCP name, and every parameter with its type, default and limits."
-nav_order: 4
 ---
 
 # Tools

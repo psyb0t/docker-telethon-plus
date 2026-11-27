@@ -1,7 +1,6 @@
 ---
 title: "Troubleshooting"
 description: "telethon-plus failures by their exact message: config errors, an unauthorized session, 401, 403, 429 FLOOD_WAIT, unknown numeric IDs and websocket closes."
-nav_order: 11
 ---
 
 # Troubleshooting

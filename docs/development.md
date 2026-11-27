@@ -1,7 +1,6 @@
 ---
 title: "Development"
 description: "Work on telethon-plus: the repository layout, the dev image and make targets, unit and integration tests, dependency updates under the age gate, CI and releases."
-nav_order: 12
 ---
 
 # Development
@@ -36,7 +35,7 @@ make test-unit    # unit tests with coverage, no Docker or Telegram needed
 make test         # integration tests against a real Telegram account
 make sec          # semgrep + bandit + pip-audit into sec.sarif (reports, never fails)
 make audit        # pip-audit on the locked runtime dependencies (fails on a finding)
-make docs         # build this site locally into .testing/docs-site
+make docs         # build this site and check its links, in a Node container
 make dev-image    # rebuild the dev image
 make shell        # a shell in the dev image
 make clean        # remove the built images
@@ -102,4 +101,4 @@ Each of these moves `exclude-newer` to seven days ago first. Rebuild with `make 
 
 So push to `main`, let the run pass, then tag that commit. The Docker Hub sync fails when `README.md` is over Docker Hub's 25,000-byte limit; move detail from the README into `docs/` rather than trimming the sync.
 
-This site is built by GitHub Pages from `docs/` on `main`. `make docs` builds it locally into `.testing/docs-site` with the same image GitHub uses; check the result before pushing a docs change.
+This site is a Docusaurus build of `docs/`, published to GitHub Pages from `main` by the `docs.yml` workflow. `make docs` builds it locally in a pinned Node container and fails on a broken link or anchor, so run it before pushing a docs change. After a dependency change in `website/package.json`, run `make docs-lock` to refresh the lockfile.

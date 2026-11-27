@@ -1,7 +1,6 @@
 ---
 title: "HTTP API"
 description: "telethon-plus REST API: bearer auth, JSON response and error shapes, status codes, and request and response examples for every message and chat route."
-nav_order: 5
 ---
 
 # HTTP API

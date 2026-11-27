@@ -1,7 +1,6 @@
 ---
 title: "Throttling and cache"
 description: "How telethon-plus keeps a Telegram account under the flood limits: per-method buckets, per-chat gaps, jitter, adaptive backoff after FLOOD_WAIT, and the entity cache."
-nav_order: 8
 ---
 
 # Throttling and cache

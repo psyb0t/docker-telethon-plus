@@ -1,0 +1,16 @@
+# docker-telethon-plus
+
+> Telethon, the MTProto userbot client, behind a JSON HTTP API and an MCP endpoint, with flood protection, an entity cache and live updates.
+
+- [docker-telethon-plus](https://psyb0t.github.io/docker-telethon-plus/): telethon-plus runs your Telegram account as an HTTP API and an MCP server: Telethon (MTProto) in a Docker container, with flood protection built in.
+- [Getting started](https://psyb0t.github.io/docker-telethon-plus/getting-started/): Get a Telegram API ID, log in once to mint a session string, then run the telethon-plus container and make the first API call.
+- [Configuration](https://psyb0t.github.io/docker-telethon-plus/configuration/): Every telethon-plus environment variable with its default: Telegram credentials, listen address, auth key, proxy, throttling, cache, updates and safety switches.
+- [Tools](https://psyb0t.github.io/docker-telethon-plus/tools/): All 34 telethon-plus tools: what each does, its REST route and MCP name, and every parameter with its type, default and limits.
+- [HTTP API](https://psyb0t.github.io/docker-telethon-plus/http-api/): telethon-plus REST API: bearer auth, JSON response and error shapes, status codes, and request and response examples for every message and chat route.
+- [MCP and agents](https://psyb0t.github.io/docker-telethon-plus/mcp/): Connect Claude Code, Codex, OpenClaw or any MCP client to telethon-plus's /mcp/ endpoint: transport, auth, tool errors and the agent plugins.
+- [Updates and webhooks](https://psyb0t.github.io/docker-telethon-plus/updates/): Receive the account's incoming Telegram events live: the /ws/updates websocket, the outbound webhook, the event payload, and what happens when a client falls behind.
+- [Throttling and cache](https://psyb0t.github.io/docker-telethon-plus/throttling/): How telethon-plus keeps a Telegram account under the flood limits: per-method buckets, per-chat gaps, jitter, adaptive backoff after FLOOD_WAIT, and the entity cache.
+- [Observability](https://psyb0t.github.io/docker-telethon-plus/observability/): telethon-plus monitoring: Prometheus metrics, live throttle and flood state, account flood-risk health, the healthcheck, throttle headers and logs.
+- [Security](https://psyb0t.github.io/docker-telethon-plus/security/): What telethon-plus can reach and store, how the auth key and session string work, which routes stay public, and the read-only and dry-run switches.
+- [Troubleshooting](https://psyb0t.github.io/docker-telethon-plus/troubleshooting/): telethon-plus failures by their exact message: config errors, an unauthorized session, 401, 403, 429 FLOOD_WAIT, unknown numeric IDs and websocket closes.
+- [Development](https://psyb0t.github.io/docker-telethon-plus/development/): Work on telethon-plus: the repository layout, the dev image and make targets, unit and integration tests, dependency updates under the age gate, CI and releases.

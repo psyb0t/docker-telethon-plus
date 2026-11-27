@@ -1,7 +1,6 @@
 ---
 title: "Configuration"
 description: "Every telethon-plus environment variable with its default: Telegram credentials, listen address, auth key, proxy, throttling, cache, updates and safety switches."
-nav_order: 3
 ---
 
 # Configuration

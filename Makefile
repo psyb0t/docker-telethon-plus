@@ -51,7 +51,7 @@ DEV_RUN_DIND := docker run --rm \
 	$(DEV_IMAGE)
 
 .PHONY: all help dev-image shell build build-test run login \
-        test test-unit lint format sec audit docs \
+        test test-unit lint format sec audit docs docs-build docs-lock \
         pkg-lock pkg-upgrade pkg-add pkg-remove pkg-update clean
 
 all: build ## Build image
@@ -122,16 +122,26 @@ sec: dev-image ## Security scan (semgrep + bandit + pip-audit) -> sec.sarif for 
 audit: dev-image ## Check the locked runtime dependencies for advisories (fails on a finding)
 	$(DEV_RUN) sh -ec 'uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt >/dev/null; pip-audit --no-deps --disable-pip -r /tmp/requirements.txt'
 
-# The GitHub Pages build of docs/, with the image GitHub itself uses, into a
-# gitignored directory. Pages serves it under /docker-telethon-plus/.
-DOCS_BUILD_IMAGE := ghcr.io/actions/jekyll-build-pages:v1.0.13@sha256:6791ebfd912185ed59bfb5fb102664fa872496b79f87ff8b9cfba292a7345041
-DOCS_OUT := .testing/docs-site
+# The documentation site runs in a pinned Node container with install scripts
+# disabled and a seven-day dependency age gate. The build itself has no network.
+DOCS_NODE_IMAGE := node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+DOCS_CACHE := .testing/docs-cache
+DOCS_RUN := docker run --rm --init --cap-drop ALL --security-opt no-new-privileges:true \
+	--user $(UID):$(GID) -e HOME=/tmp -e COREPACK_HOME=/cache/corepack \
+	-v "$(CURDIR)/$(DOCS_CACHE):/cache" \
+	-v "$(CURDIR)/docs:/work/docs:ro" -v "$(CURDIR)/website:/work/website" -w /work/website
 
-docs: ## Build the documentation site locally into .testing/docs-site
-	docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e GITHUB_WORKSPACE=/work \
-		-e GITHUB_REPOSITORY=psyb0t/docker-telethon-plus -e INPUT_SOURCE=docs \
-		-e INPUT_DESTINATION=$(DOCS_OUT) -e INPUT_VERBOSE=false \
-		-v $(PWD):/work $(DOCS_BUILD_IMAGE)
+docs: docs-build ## Build the documentation site into website/build and check its links
+
+docs-build: | $(DOCS_CACHE)
+	$(DOCS_RUN) $(DOCS_NODE_IMAGE) corepack pnpm install --frozen-lockfile --ignore-scripts --store-dir /cache/pnpm
+	$(DOCS_RUN) --network none $(DOCS_NODE_IMAGE) corepack pnpm run build
+
+docs-lock: | $(DOCS_CACHE) ## Refresh website/pnpm-lock.yaml from website/package.json
+	$(DOCS_RUN) $(DOCS_NODE_IMAGE) corepack pnpm install --lockfile-only --ignore-scripts --store-dir /cache/pnpm
+
+$(DOCS_CACHE):
+	mkdir -p "$@"
 
 # Every dependency change bumps [tool.uv] exclude-newer to seven days ago
 # first, so the supply-chain age gate is anchored to the moment of the change.

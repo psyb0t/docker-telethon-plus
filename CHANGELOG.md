@@ -2,6 +2,16 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.5, 2026-11-27
+
+### Changed
+
+- **The skill states what it can do and where data goes.** Its declared permissions now list the `curl` and `scripts/telethon.sh` calls that can read, send and delete messages as the account, the traffic to Telegram, to a caller-supplied `file_url` and to `TELETHON_POST_TO_URL`, and the files it writes. Deleting messages or chats, and banning, kicking or promoting members, are limited to what the user asked for, naming the exact target. The `file_url` note now says the server follows redirects and does not filter private or loopback addresses.
+- **The setup reference publishes the port on loopback.** The `docker run` and compose examples use `127.0.0.1:8080:8080`, and the first login runs with Docker alone and reads the API ID and hash from environment variables instead of the command line.
+- **The published skill names the exact image.** On a release, a bare reference to `psyb0t/telethon-plus` in the ClawHub copy of the skill becomes the release tag and digest. The repository keeps its references.
+- **The documentation site moved from Jekyll to Docusaurus at the same URLs.** A new `docs.yml` workflow builds it on every pull request and publishes it from `main`, `make docs` fails on a broken internal link or anchor, and `make docs-lock` refreshes the pinned dependency lockfile.
+- **The image publish job runs only on pushes to the default branch.** It also sets the Docker Hub repository to public and sets its short description from the GitHub description.
+
 ## v0.7.4, 2026-11-10
 
 ### Changed

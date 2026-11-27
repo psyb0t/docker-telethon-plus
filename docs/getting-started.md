@@ -1,7 +1,6 @@
 ---
 title: "Getting started"
 description: "Get a Telegram API ID, log in once to mint a session string, then run the telethon-plus container and make the first API call."
-nav_order: 2
 ---
 
 # Getting started

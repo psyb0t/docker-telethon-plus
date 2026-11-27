@@ -34,3 +34,4 @@ sec.sarif
 .coverage
 .flake8
 docs/
+website/

@@ -15,29 +15,25 @@ Operator-side reference: installing, logging in, and configuring the container. 
 - A **string session** minted once via the interactive login flow (`make login`). This proves the human once (phone number, SMS code, optionally 2FA), then never again.
 - Outbound network to Telegram's MTProto servers.
 
-> **The session string is full account access.** Whoever holds it *is* the account. Never commit it, paste it in chat, or bake it into an image. `.env` is gitignored for this reason.
+> **The session string is full account access.** Whoever holds it *is* the account. Never commit it, paste it in chat, or bake it into an image. A local `.env` file is gitignored for this reason.
 
 ## First-time login (operator)
 
 Login is interactive and happens **once**, outside the agent. It writes a `TELETHON_SESSION` string you then hand to the running container.
 
-With the repo (writes the session straight into `.env`):
+With Docker only, no checkout needed:
 
 ```bash
-cp .env.example .env
-$EDITOR .env            # set TELETHON_API_ID and TELETHON_API_HASH
-make login              # interactive: phone → SMS code → optional 2FA
-make run                # run locally on :8080
-```
+export TELETHON_API_ID=123456
+export TELETHON_API_HASH=your-api-hash   # placeholder: use your own value
 
-Without the repo:
-
-```bash
 docker run --rm -it \
-  -e TELETHON_API_ID=123456 \
-  -e TELETHON_API_HASH=your-api-hash \
+  -e TELETHON_API_ID \
+  -e TELETHON_API_HASH \
   psyb0t/telethon-plus login
 ```
+
+From a checkout of the repository, `make login` runs the same container with the two variables above exported, then saves the session string to a local `.env` file that git ignores. That file holds full account access, so keep it mode 600.
 
 Copy the printed session string and set it as `TELETHON_SESSION` on the server container.
 
@@ -47,7 +43,7 @@ Copy the printed session string and set it as `TELETHON_SESSION` on the server c
 
 ```bash
 docker run -d --name telethon-plus \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -e TELETHON_API_ID=123456 \
   -e TELETHON_API_HASH=your-api-hash \
   -e TELETHON_SESSION='1Aa...long-string-from-login...' \
@@ -63,7 +59,7 @@ services:
   telethon-plus:
     image: psyb0t/telethon-plus
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       TELETHON_API_ID: "123456"
       TELETHON_API_HASH: "your-api-hash"
@@ -144,7 +140,7 @@ Mount `/cache` as a host volume so the persistent entity cache survives restarts
 |---|---|---|
 | `TELETHON_UPDATES_ENABLED` | `true` | Register incoming-event handlers and expose `/ws/updates` |
 | `TELETHON_UPDATES_BUFFER_SIZE` | `256` | Per-subscriber WS queue depth; a client that falls this far behind is closed with code 1013 and must reconnect and catch up with `GET /api/messages` |
-| `TELETHON_POST_TO_URL` | `""` | Outbound webhook: every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. **Data exfiltration warning:** once set, EVERY incoming message's content, sender metadata, and account activity is forwarded to this URL, indefinitely, for as long as the container runs. Use only a trusted HTTPS endpoint you control, never a third party's URL. |
+| `TELETHON_POST_TO_URL` | `""` | Outbound webhook: every incoming event is `POST`ed here as JSON (in addition to WS). Empty = disabled. Once set, every incoming message's content and sender metadata goes to this URL until the container stops, so use an HTTPS endpoint you control. |
 | `TELETHON_POST_TO_TIMEOUT` | `10` | Webhook POST timeout (seconds) |
 
 ## Ports

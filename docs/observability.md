@@ -1,7 +1,6 @@
 ---
 title: "Observability"
 description: "telethon-plus monitoring: Prometheus metrics, live throttle and flood state, account flood-risk health, the healthcheck, throttle headers and logs."
-nav_order: 9
 ---
 
 # Observability
