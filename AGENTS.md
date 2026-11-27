@@ -52,7 +52,7 @@ Request path: REST route or MCP tool call -> params model validation -> tool han
 | `tests/` | Integration suite against a real account (`tests/conftest.py` starts the image) |
 | `docs/` | The documentation pages |
 | `website/` | The Docusaurus site that builds `docs/` |
-| `.agents/skills/telethon-plus/` | The agent skill, its `references/setup.md` and `scripts/telethon.sh` |
+| `.agents/skills/telethon-plus/` | The agent skill and `scripts/telethon.sh` |
 | `.agents/plugins/telethon-plus/` | The OpenClaw stdio-to-HTTP MCP bridge plugin |
 | `.agents/.claude-plugin/`, `.agents/.codex-plugin/` | Claude Code and Codex plugin manifests |
 | `.agents/rules/` | Rules for changing this repository |

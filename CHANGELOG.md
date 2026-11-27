@@ -2,6 +2,13 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org).
 
+## v0.7.6, 2026-11-27
+
+### Changed
+
+- **The skill covers only using a running telethon-plus.** It describes the HTTP API, the MCP tools and the `scripts/telethon.sh` helper for a server that is already installed and logged in. Install steps, the first login and server configuration are out of the skill and stay in the [documentation](https://psyb0t.github.io/docker-telethon-plus/) and the README. `references/setup.md` is removed.
+- **The ClawHub publish job no longer sets `pin_images`.** Publishing no longer rewrites the skill's image references to the release.
+
 ## v0.7.5, 2026-11-27
 
 ### Changed

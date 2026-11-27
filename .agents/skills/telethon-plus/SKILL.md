@@ -4,11 +4,11 @@ description: HTTP + MCP control plane over a REAL Telegram MTProto userbot (Tele
 homepage: https://github.com/psyb0t/docker-telethon-plus
 user-invocable: true
 metadata:
-  { "openclaw": { "emoji": "✈️", "primaryEnv": "TELETHON_PLUS_URL", "requires": { "bins": ["docker", "curl"] } } }
+  { "openclaw": { "emoji": "✈️", "primaryEnv": "TELETHON_PLUS_URL", "requires": { "bins": ["curl", "jq"] } } }
 permissions:
-  shell: "runs `curl` and the bundled `scripts/telethon.sh` wrapper (curl + jq) for runtime API calls, which can read, send (including media by URL) and delete messages as the account; operator setup in references/setup.md runs `docker` and `make login`"
-  network: "HTTP to $TELETHON_PLUS_URL for every API/MCP call; the server it points at talks to Telegram, fetches a caller-supplied file_url server-side (POST /api/messages, send_file), and posts incoming events to TELETHON_POST_TO_URL when the operator sets it; `docker pull` uses Docker Hub"
-  filesystem: "writes attachments the user asks to download to a path the user chooses; operator setup mounts a /cache directory and may keep the session string in a local .env file"
+  shell: "runs `curl` and the bundled `scripts/telethon.sh` wrapper (curl + jq) for API calls, which can read, send (including media by URL) and delete messages as the account"
+  network: "HTTP to $TELETHON_PLUS_URL for every API/MCP call; the server it points at talks to Telegram, fetches a caller-supplied file_url server-side (POST /api/messages, send_file), and posts incoming events to TELETHON_POST_TO_URL when the operator sets it"
+  filesystem: "writes attachments the user asks to download to a path the user chooses"
   account_access: "full-access Telegram user account: read, write, and admin (not a sandboxed bot); every call acts as the account owner"
 ---
 
@@ -28,14 +28,12 @@ Capabilities:
 - **Incoming events**: every new message / edit / delete / chat action streamed over WebSocket **and** POSTed to your webhook (`TELETHON_POST_TO_URL`).
 - **Health / throttle**: liveness, live rate-limit state, flood-risk tier, Prometheus metrics.
 
-For installation, login, and container setup, see [references/setup.md](references/setup.md).
-
 ## Security & safety
 
-- **Declared capabilities** (see `permissions:` in the frontmatter): runtime calls are plain HTTP via `curl`, `scripts/telethon.sh` or MCP; `docker` and `make login` appear only in the one-time operator setup in [references/setup.md](references/setup.md). The account itself is full access: read, write and admin, not a sandboxed bot.
+- **Declared capabilities** (see `permissions:` in the frontmatter): calls are plain HTTP via `curl`, `scripts/telethon.sh` or MCP. The account itself is full access: read, write and admin, not a sandboxed bot.
 - **Where data goes.** Requests go to `$TELETHON_PLUS_URL`; use a loopback address or an HTTPS URL of a server you run. That server talks to Telegram's MTProto servers, fetches `file_url` when you pass one (see the note under `POST /api/messages`), and, when the operator sets `TELETHON_POST_TO_URL`, posts every incoming event there (see "Incoming-message webhook").
 - **Guardrail for destructive and admin operations.** Act only on chats, messages and members the task owns, and only when the user asked for that specific action, naming the exact target (chat, message IDs, user). This covers `DELETE /api/messages`, `DELETE /api/chats`, and ban, kick, promote and demote.
-- **Deployment:** bind the server to `localhost`/loopback or put it behind TLS on a reverse proxy, set `TELETHON_AUTH_KEY` (empty = no auth, wide open), and never expose `/mcp/` or `/api/` to untrusted agents/networks. Either surface hands out full account control. See [references/setup.md](references/setup.md) for the full deployment + auth guidance.
+- **Full account control.** `/mcp/` and `/api/` both hand out full control of the account, so never pass their URL or key to untrusted agents or networks.
 
 ## Authorized / responsible use
 
@@ -43,7 +41,7 @@ For installation, login, and container setup, see [references/setup.md](referenc
 
 - Only ever point this skill at an instance **the user runs and owns**, driving **the user's own account** (or an account they are explicitly authorized to operate).
 - **Do not** send spam, mass-DM strangers, scrape at volume, auto-join channels en masse, or run any automation that violates [Telegram's Terms of Service](https://telegram.org/tos). That gets the account **banned** (the throttle layer reduces flood risk, it does not make abuse safe).
-- **Never** provision, escalate, or log in a new account from here. This skill is **consumer-only**: it talks to an already-running, already-authorized instance. First-time login is an operator-side step (see setup) and is out of scope for the agent.
+- **Never** provision, escalate, or log in a new account from here. This skill is **consumer-only**: it talks to an already-running, already-authorized instance. Logging in is out of scope for the agent.
 - Writes act as the user, and other people in the chat see them.
 - Never print, log, or echo the session string, `TELETHON_API_HASH`, `TELETHON_AUTH_KEY`, phone numbers, or message contents beyond what the task needs.
 
@@ -68,18 +66,10 @@ For installation, login, and container setup, see [references/setup.md](referenc
 
 ## Setup
 
-The container should already be running and logged in (operator-side, see setup). Set the base URL:
+telethon-plus must already be installed, logged in and running; for that, see the docs at https://psyb0t.github.io/docker-telethon-plus/. This skill reads the connection values from the environment the user set:
 
-```bash
-export TELETHON_PLUS_URL=http://localhost:8080
-```
-
-If the server was started with `TELETHON_AUTH_KEY`, export it too. Every request except `/healthz` and `/metrics` then needs the bearer header:
-
-```bash
-export TELETHON_AUTH_KEY=<the-key>
-# add to every call below:  -H "Authorization: Bearer $TELETHON_AUTH_KEY"
-```
+- `TELETHON_PLUS_URL`: base URL of the instance (for example `http://localhost:8080`).
+- `TELETHON_AUTH_KEY`: only if the instance requires it. Every request except `/healthz` and `/metrics` then needs `-H "Authorization: Bearer $TELETHON_AUTH_KEY"` (the examples below omit the header for brevity).
 
 **Verify:**
 
@@ -88,15 +78,13 @@ curl -s $TELETHON_PLUS_URL/healthz
 # {"status": "ok", "authorized": true}
 ```
 
-If the session is dead (bad/revoked string, or Telegram unreachable) the container fails to start rather than booting with `authorized: false`. The process exits and `/healthz` never comes up. Check `docker logs` and re-login. `/healthz` is always public.
-
-For install / first-time login / env vars / ports, see [references/setup.md](references/setup.md).
+If the session is dead the instance does not come up and `/healthz` never answers. Tell the user; do not try to log in. `/healthz` is always public.
 
 ## Conventions
 
 - **Response shape:** every 2xx returns the resource directly (no `{"result": ...}` envelope). Lists are JSON arrays, singles are JSON objects. Errors return `{"detail": ...}` (FastAPI standard).
 - **Chat references** (`chat`, `from_chat`, `to_chat`) accept whatever Telethon accepts: `@username`, phone `+1234567890`, `https://t.me/name`, numeric ID `123456789`, supergroup/channel ID `-1001234567890`, or `me` (your Saved Messages). In `{chat}` path segments, phone and `t.me` links must be URL-encoded (`+` → `%2B`); usernames and IDs work inline.
-- **Errors:** `400` bad JSON / validation / bad input · `401` missing-or-wrong bearer (only when `TELETHON_AUTH_KEY` set) · `403` write attempted in read-only mode · `404` unknown endpoint / admin action · `429` `FLOOD_WAIT` too long to sleep through, with `Retry-After` and body `{"detail": {"telegram_error": "FloodWaitError", "message": "...", "seconds": N}}`: wait that long before repeating the call · `502` any other Telegram RPC error, body `{"detail": {"telegram_error": "...", "message": "..."}}`.
+- **Errors:** `400` bad JSON / validation / bad input · `401` missing-or-wrong bearer (only when `TELETHON_AUTH_KEY` set) · `403` write attempted in read-only mode (in dry-run mode, writes are validated but not sent and the response echoes `{"dry_run": true, ...}`) · `404` unknown endpoint / admin action · `429` `FLOOD_WAIT` too long to sleep through, with `Retry-After` and body `{"detail": {"telegram_error": "FloodWaitError", "message": "...", "seconds": N}}`: wait that long before repeating the call · `502` any other Telegram RPC error, body `{"detail": {"telegram_error": "...", "message": "..."}}`.
 
 ## API: `GET /api/me`
 
@@ -371,7 +359,7 @@ curl -s -X POST "$TELETHON_PLUS_URL/api/chats/-1001234567890/admin/ban" \
 
 Every `/api/...` response also carries `X-Throttle-Multiplier`, `X-Throttle-Flood-Events-1h`, and `X-RateLimit-Remaining-<bucket>` headers, so clients can self-throttle without polling.
 
-> The server ships **conservative anti-flood throttling** on by default (per-method token buckets, per-chat send/read intervals, global gap + jitter, adaptive backoff on `FLOOD_WAIT`, plus a persistent entity cache). If a call seems slow, it may be the throttle protecting the account. Check `GET /api/throttle/status`. Tuning the buckets is an operator concern (see setup); don't try to defeat them.
+> The server ships **conservative anti-flood throttling** on by default (per-method token buckets, per-chat send/read intervals, global gap + jitter, adaptive backoff on `FLOOD_WAIT`, plus a persistent entity cache). If a call seems slow, it may be the throttle protecting the account. Check `GET /api/throttle/status`. Tuning the buckets is an operator concern; don't try to defeat them.
 
 ## Incoming-message webhook (`TELETHON_POST_TO_URL`)
 
@@ -401,20 +389,7 @@ The same events also stream over **WebSocket** at `GET /ws/updates` (pass `?toke
 
 An MCP server is mounted at **`/mcp/`** using the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), on the same port as the HTTP API, behind the same bearer auth. It's **stateless**: every request is independent, no session juggling. Every tool in the registry (same names, same schemas as the endpoints above) is exposed automatically.
 
-Point an MCP-aware agent at:
-
-```
-http://your-host:8080/mcp/
-```
-
-Wire into Claude Code:
-
-```bash
-claude mcp add --transport http telethon-plus $TELETHON_PLUS_URL/mcp/
-# with auth:
-claude mcp add --transport http telethon-plus $TELETHON_PLUS_URL/mcp/ \
-  --header "Authorization: Bearer $TELETHON_AUTH_KEY"
-```
+Point an MCP-aware agent at `$TELETHON_PLUS_URL/mcp/`, with `Authorization: Bearer $TELETHON_AUTH_KEY` when the instance requires a key.
 
 The 34 tools, grouped: `get_me`, `get_entity`, `bulk_resolve`, `get_dialogs`, `get_messages`, `get_message`, `send_message`, `send_file`, `edit_message`, `delete_messages`, `forward_messages`, `mark_read`, `download_media`, `set_reaction`, `remove_reaction`, `pin_message`, `unpin_message`, `get_participants`, `create_group`, `delete_chat`, `join_chat`, `leave_chat`, `join_via_invite`, `get_linked_chat`, `ban_user`, `unban_user`, `kick_user`, `promote_user`, `demote_user`, `create_poll`, `vote_poll`, `get_poll_results`, `throttle_status`, `account_health`.
 
@@ -448,7 +423,7 @@ MCP tool errors come back as an error result (`isError: true`) whose text is JSO
 
 ## Bearer-Token Auth
 
-If `TELETHON_AUTH_KEY` is set on the server, every route **except `/healthz` and `/metrics`** requires `Authorization: Bearer <key>` (constant-time compared). Missing/wrong → `401 {"detail":"unauthorized"}`. The WebSocket takes the key as `?token=`. Empty/unset key = wide open (fine on a private network); for untrusted networks pair the key with a reverse proxy doing TLS.
+If `TELETHON_AUTH_KEY` is set on the server, every route **except `/healthz` and `/metrics`** requires `Authorization: Bearer <key>` (constant-time compared). Missing/wrong → `401 {"detail":"unauthorized"}`. The WebSocket takes the key as `?token=`. Empty/unset key = wide open.
 
 ```bash
 curl -s -H "Authorization: Bearer $TELETHON_AUTH_KEY" $TELETHON_PLUS_URL/api/me | jq
